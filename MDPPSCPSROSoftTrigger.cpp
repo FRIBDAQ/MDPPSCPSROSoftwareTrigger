@@ -31,6 +31,7 @@
 #include <vector>
 #include <cstdint>
 #include <queue>
+#include <deque>
 
 #include "MDPPSCPSRO.h"
 
@@ -45,7 +46,9 @@
 //#define DEBUG
 
 using std::queue;
+using std::deque;
 using std::cout;
+using std::cerr;
 using std::endl;
 
     bool timeSet = false;
@@ -72,7 +75,7 @@ uint64_t  mdppRolloverCounter = 0;
  double   windowStartTimestamp_ns = 0;
  double     windowEndTimestamp_ns = 0;
 
-queue<MDPPSCPSRO *> chQueue[32];
+deque<MDPPSCPSRO *> hitDeque;
 queue<MDPPSCPSRO *> eventQueue;
 
 /**
@@ -289,17 +292,25 @@ void updateTimestamps(MDPPSCPSRO &anEvent)
 	latestAbsoluteMdppTimestamp_ns = getAbsoluteMdppTimestamp_ns(anEvent);
 }
 
-MDPPSCPSRO &getEvent(int channel)
+MDPPSCPSRO &getLastEvent()
 {
-	MDPPSCPSRO *pAnEvent = chQueue[channel].front();
-	chQueue[channel].pop();
+	MDPPSCPSRO *pAnEvent = hitDeque.back();
+	hitDeque.pop_back();
 
 	return *pAnEvent;
 }
 
-MDPPSCPSRO &peekEvent(int channel)
+MDPPSCPSRO &getFirstEvent()
 {
-	return *chQueue[channel].front();
+	MDPPSCPSRO *pAnEvent = hitDeque.front();
+	hitDeque.pop_front();
+
+	return *pAnEvent;
+}
+
+MDPPSCPSRO &peekFirstEvent()
+{
+	return *hitDeque.front();
 }
 
 void collectEvent(MDPPSCPSRO &anEvent)
@@ -374,72 +385,92 @@ void sendCollection(CDataSink &sink)
 
 void sending(CDataSink &sink, bool isTriggerChannel)
 {
-	if (isTriggerChannel && collectingDone) {
-		MDPPSCPSRO &triggerEvent = getEvent(triggerChannel);
+	if (isTriggerChannel && !dataCollecting) {
+		MDPPSCPSRO &triggerEvent = getLastEvent();
 		windowStartTimestamp_ns = getAbsoluteMdppTimestamp_ns(triggerEvent) - windowStart_ns;
 		if (windowStartTimestamp_ns < 0) {
 			windowStartTimestamp_ns = 0;
 		}
 		windowEndTimestamp_ns = windowStartTimestamp_ns + windowWidth_ns;
 
-		for (int iCh = 0; iCh < NUM_CHANNEL; iCh++) {
-			while (!chQueue[iCh].empty()) {
-				MDPPSCPSRO &anEvent = getEvent(iCh);
-				if (getAbsoluteMdppTimestamp_ns(anEvent) >= windowStartTimestamp_ns && getAbsoluteMdppTimestamp_ns(anEvent) <= windowEndTimestamp_ns) {
-					collectEvent(anEvent);
-				} else {
-					CPhysicsEventItem &packedEvent = *pack(anEvent);
-					send(sink, packedEvent);
-				}
+		while (!hitDeque.empty()) {
+			MDPPSCPSRO &anEvent = getFirstEvent();
+
+			if (getAbsoluteMdppTimestamp_ns(anEvent) >= windowStartTimestamp_ns && getAbsoluteMdppTimestamp_ns(anEvent) <= windowEndTimestamp_ns)
+		 	{
+#ifdef DEBUG
+				cout << "== Collected before trigger event ==" << endl;
+				cout << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) - windowStartTimestamp_ns << endl;
+#endif
+				collectEvent(anEvent);
+			}
+			else if (getAbsoluteMdppTimestamp_ns(anEvent) < windowStartTimestamp_ns) 
+			{
+#ifdef DEBUG
+				cout << "== Flushing before window start event ==" << endl;
+				cout << "            Window start timestamp in ns: " << windowStartTimestamp_ns << endl;
+				cout << "                    MDPP timestamp in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) << endl;
+#endif
+				CPhysicsEventItem &packedEvent = *pack(anEvent);
+				send(sink, packedEvent);
+			}
+		 	else 
+			{
+				cerr << "== This shouldn't be happening!" << endl;
+
+				break;
 			}
 		}
+
+#ifdef DEBUG
+				cout << "== Collected trigger event ==" << endl;
+				cout << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(triggerEvent) - windowStartTimestamp_ns << endl;
+#endif
 
 		collectEvent(triggerEvent);
 
 		dataCollecting = true;
-		collectingDone = false;
-	} else if (dataCollecting && !collectingDone) {
-		bool chCollectingDone[NUM_CHANNEL];
+	} else if (dataCollecting) {
+		MDPPSCPSRO &anEvent = peekFirstEvent();
 
-		for (int iCh = 0; iCh < NUM_CHANNEL; iCh++) {
-			chCollectingDone[iCh] = windowEndTimestamp_ns < latestAbsoluteMdppTimestamp_ns && chQueue[iCh].empty();
+		if (getAbsoluteMdppTimestamp_ns(anEvent) >= windowStartTimestamp_ns && getAbsoluteMdppTimestamp_ns(anEvent) <= windowEndTimestamp_ns)
+		{
+#ifdef DEBUG
+				cout << "== Collected after trigger event ==" << endl;
+				cout << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) - windowStartTimestamp_ns << endl;
+#endif
+			anEvent = getFirstEvent();
 
-			while (!chQueue[iCh].empty()) {
-				MDPPSCPSRO &anEvent = peekEvent(iCh);
-				if (getAbsoluteMdppTimestamp_ns(anEvent) >= windowStartTimestamp_ns && getAbsoluteMdppTimestamp_ns(anEvent) <= windowEndTimestamp_ns) {
-					anEvent = getEvent(iCh);
-
-					collectEvent(anEvent);
-				} else {
-					chCollectingDone[iCh] = true;
-
-					break;
-				}
-			}
+			collectEvent(anEvent);
 		}
+		else if (windowEndTimestamp_ns < latestAbsoluteMdppTimestamp_ns)
+		{
+#ifdef DEBUG
+				cout << "== Collecting done! Sending ==" << endl;
+#endif
+			dataCollecting = false;
 
-		collectingDone = true;
-		for (int iCh = 0; iCh < NUM_CHANNEL; iCh++) {
-			collectingDone &= chCollectingDone[iCh];
-		}
-		
-		dataCollecting = !collectingDone;
-
-		if (collectingDone) {
 			sendCollection(sink);
 		}
+		else
+		{
+			cerr << "== This shouldn't be happening! ==" << endl;
+		}
 	}	else {
-		for (int iCh = 0; iCh < NUM_CHANNEL; iCh++) {
-			while (!chQueue[iCh].empty()) {
-				MDPPSCPSRO &anEvent = peekEvent(iCh);
+		while (!hitDeque.empty()) {
+			MDPPSCPSRO &anEvent = peekFirstEvent();
 
-				if (latestAbsoluteMdppTimestamp_ns - getAbsoluteMdppTimestamp_ns(anEvent) > windowStart_ns) {
-					anEvent = getEvent(iCh);
-					CPhysicsEventItem &packedEvent = *pack(anEvent);
-					send(sink, packedEvent);
-				} else {
-					break;
-				}
+			if (latestAbsoluteMdppTimestamp_ns - getAbsoluteMdppTimestamp_ns(anEvent) > windowStart_ns) {
+#ifdef DEBUG
+				cout << "== Too far from the window start ==" << endl;
+				cout << "                    MDPP timestamp in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) << endl;
+				cout << "                  latest timestamp in ns: " << latestAbsoluteMdppTimestamp_ns << endl;
+#endif
+				anEvent = getFirstEvent();
+				CPhysicsEventItem &packedEvent = *pack(anEvent);
+				send(sink, packedEvent);
+			} else {
+				break;
 			}
 		}
 	}
@@ -447,17 +478,18 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 
 void emptyingQueues(CDataSink &sink)
 {
+#ifdef DEBUG
+				cout << "== Emptying for ending ==" << endl;
+#endif
 	if (!eventQueue.empty()) {
 		sendCollection(sink);
 	}
 
-	for (int iCh = 0; iCh < NUM_CHANNEL; iCh++) {
-		while (!chQueue[iCh].empty()) {
-			MDPPSCPSRO &anEvent = getEvent(iCh);
+	while (!hitDeque.empty()) {
+		MDPPSCPSRO &anEvent = getFirstEvent();
 
-			CPhysicsEventItem &packedEvent = *pack(anEvent);
-			send(sink, packedEvent);
-		}
+		CPhysicsEventItem &packedEvent = *pack(anEvent);
+		send(sink, packedEvent);
 	}
 }
 
@@ -518,8 +550,6 @@ int main(int argc, char **argv)
 	// all are used up.  The use of an std::unique_ptr ensures that the
 	// dynamically created ring items we get from the data source are
 	// automatically deleted when we exit the block in which it's created.
-	std::ofstream ho("ha");
-	int idx = 0;
 
 	CRingItem *pItem;
 	while ((pItem = pDataSource -> getItem() )) {
@@ -549,7 +579,7 @@ int main(int argc, char **argv)
 				timeSet = true;
 			}
 
-			chQueue[anEvent.ch].push(&anEvent);
+			hitDeque.push_back(&anEvent);
 			updateTimestamps(anEvent);
 			sending(*sink, anEvent.ch == triggerChannel);
 		} else if (item.type() == END_RUN) {
