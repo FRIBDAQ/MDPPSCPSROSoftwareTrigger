@@ -37,7 +37,7 @@
 
 #define EXTERNAL_TIMESTAMP_MAX   0xFFFFFFFF // 32bits
 #define EXTERNAL_CLOCK_PERIOD_NS 62.5  // ns (16MHz)
-#define MDPP_TDC_UNIT            24.11 // ps
+#define MDPP_TDC_UNIT            24.41 // ps
 #define MDPP_TDC_MAX             0x3FFFFFFF
 #define MDPP_TIMESTAMP_MAX_NS    MDPP_TDC_MAX*MDPP_TDC_UNIT/1000.
 
@@ -60,20 +60,25 @@ uint64_t externalTimestampRolloverCounter = 0;
 uint64_t  mdppTimestampRef    = 0;  // in 24.41ps
   double     mdppTimestamp_ns = 0;
   double prevMdppTimestamp_ns = 0;
+uint64_t latestAbsoluteMdppTimestamp    = 0;
   double latestAbsoluteMdppTimestamp_ns = 0;
 
 uint64_t  mdppRolloverCounter = 0;
 
 	double refDiff_ns = 0;
 
-		int   triggerChannel = -1;
- double   windowStart_ns = -1; // valid always positive
- double   windowWidth_ns = -1; // valid always positive
+     int  triggerChannel = -1;
+  double  windowStart_ns = -1; // valid always positive
+  double  windowWidth_ns = -1; // valid always positive
+uint64_t  windowStart    = 0; // derived from ns approx value in 24.41ps
+uint64_t  windowWidth    = 0; // derived from ns approx value in 24.41ps
 
-   bool dataCollecting = false;
-   bool collectingDone = true;
- double   windowStartTimestamp_ns = 0;
- double     windowEndTimestamp_ns = 0;
+    bool dataCollecting = false;
+    bool collectingDone = true;
+  double  windowStartTimestamp_ns = 0;
+  double    windowEndTimestamp_ns = 0;
+uint64_t  windowStartTimestamp    = 0;
+uint64_t    windowEndTimestamp    = 0;
 
 deque<MDPPSCPSRO *> hitDeque;
 queue<MDPPSCPSRO *> eventQueue;
@@ -106,9 +111,19 @@ double getTimestamp_ns(MDPPSCPSRO &anEvent)
 	return (externalTimestampRolloverCounter*EXTERNAL_TIMESTAMP_MAX + anEvent.externaltimestamp)*EXTERNAL_CLOCK_PERIOD_NS - refDiff_ns;
 }
 
+uint32_t getMdppTimestamp(MDPPSCPSRO &anEvent)
+{
+	return anEvent.timestamp;
+}
+
 double getMdppTimestamp_ns(MDPPSCPSRO &anEvent)
 {
 	return anEvent.timestamp*MDPP_TDC_UNIT/1000.;
+}
+
+uint64_t getAbsoluteMdppTimestamp(MDPPSCPSRO &anEvent)
+{
+	return (anEvent.rollovercounter << 30) | getMdppTimestamp(anEvent);
 }
 
 double getAbsoluteMdppTimestamp_ns(MDPPSCPSRO &anEvent)
@@ -218,7 +233,7 @@ CPhysicsEventItem *pack(MDPPSCPSRO &anEvent)
 	std::memcpy(dest, &anEvent.externaltimestamp, 4);
 	dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
-	uint64_t zeroPad = 0;
+	uint32_t zeroPad = 0;
 
 	std::memcpy(dest, &zeroPad, 4);
 	dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
@@ -289,6 +304,7 @@ void updateTimestamps(MDPPSCPSRO &anEvent)
 	}
 
 	anEvent.rollovercounter = mdppRolloverCounter;
+	latestAbsoluteMdppTimestamp    = getAbsoluteMdppTimestamp(anEvent);
 	latestAbsoluteMdppTimestamp_ns = getAbsoluteMdppTimestamp_ns(anEvent);
 }
 
@@ -341,7 +357,7 @@ void sendCollection(CDataSink &sink)
 		std::memcpy(dest, &anEvent.externaltimestamp, 4);
 		dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
-		uint64_t zeroPad = 0;
+		uint32_t zeroPad = 0;
 
 		std::memcpy(dest, &zeroPad, 4);
 		dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
@@ -353,7 +369,9 @@ void sendCollection(CDataSink &sink)
 		std::memcpy(dest, &firstItem, 4);
 		dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
-		std::memcpy(dest, &zeroPad, 4);
+		uint32_t timestampFromStart = getAbsoluteMdppTimestamp(anEvent) - windowStartTimestamp;
+
+		std::memcpy(dest, &timestampFromStart, 4);
 		dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
 		uint64_t rolloverItem = (0x2 << 30) | (mdppRolloverCounter&0x3FFFFFFF);
@@ -387,29 +405,32 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 {
 	if (isTriggerChannel && !dataCollecting) {
 		MDPPSCPSRO &triggerEvent = getLastEvent();
+		windowStartTimestamp    = getAbsoluteMdppTimestamp(triggerEvent) - windowStart;
 		windowStartTimestamp_ns = getAbsoluteMdppTimestamp_ns(triggerEvent) - windowStart_ns;
-		if (windowStartTimestamp_ns < 0) {
+		if (getAbsoluteMdppTimestamp(triggerEvent) < windowStart) {
+			windowStartTimestamp    = 0;
 			windowStartTimestamp_ns = 0;
 		}
+		windowEndTimestamp    = windowStartTimestamp + windowWidth;
 		windowEndTimestamp_ns = windowStartTimestamp_ns + windowWidth_ns;
 
 		while (!hitDeque.empty()) {
 			MDPPSCPSRO &anEvent = getFirstEvent();
 
-			if (getAbsoluteMdppTimestamp_ns(anEvent) >= windowStartTimestamp_ns && getAbsoluteMdppTimestamp_ns(anEvent) <= windowEndTimestamp_ns)
+			if (getAbsoluteMdppTimestamp(anEvent) >= windowStartTimestamp && getAbsoluteMdppTimestamp(anEvent) <= windowEndTimestamp)
 		 	{
 #ifdef DEBUG
 				cout << "== Collected before trigger event ==" << endl;
-				cout << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) - windowStartTimestamp_ns << endl;
+				cout << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) - windowStartTimestamp_ns << " (" << getAbsoluteMdppTimestamp(anEvent) - windowStartTimestamp << ")" << endl;
 #endif
 				collectEvent(anEvent);
 			}
-			else if (getAbsoluteMdppTimestamp_ns(anEvent) < windowStartTimestamp_ns) 
+			else if (getAbsoluteMdppTimestamp(anEvent) < windowStartTimestamp)
 			{
 #ifdef DEBUG
 				cout << "== Flushing before window start event ==" << endl;
-				cout << "            Window start timestamp in ns: " << windowStartTimestamp_ns << endl;
-				cout << "                    MDPP timestamp in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) << endl;
+				cout << "            Window start timestamp in ns: " << windowStartTimestamp_ns << " (" << windowStartTimestamp << ")" << endl;
+				cout << "                    MDPP timestamp in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) << " (" << getAbsoluteMdppTimestamp(anEvent) << ")" << endl;
 #endif
 				CPhysicsEventItem &packedEvent = *pack(anEvent);
 				send(sink, packedEvent);
@@ -424,7 +445,7 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 
 #ifdef DEBUG
 				cout << "== Collected trigger event ==" << endl;
-				cout << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(triggerEvent) - windowStartTimestamp_ns << endl;
+				cout << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(triggerEvent) - windowStartTimestamp_ns << " (" << getAbsoluteMdppTimestamp(triggerEvent) - windowStartTimestamp << ")" << endl;
 #endif
 
 		collectEvent(triggerEvent);
@@ -433,17 +454,17 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 	} else if (dataCollecting) {
 		MDPPSCPSRO &anEvent = peekFirstEvent();
 
-		if (getAbsoluteMdppTimestamp_ns(anEvent) >= windowStartTimestamp_ns && getAbsoluteMdppTimestamp_ns(anEvent) <= windowEndTimestamp_ns)
+		if (getAbsoluteMdppTimestamp(anEvent) >= windowStartTimestamp && getAbsoluteMdppTimestamp(anEvent) <= windowEndTimestamp)
 		{
 #ifdef DEBUG
 				cout << "== Collected after trigger event ==" << endl;
-				cout << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) - windowStartTimestamp_ns << endl;
+				cout << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) - windowStartTimestamp_ns << " (" << getAbsoluteMdppTimestamp(anEvent) - windowStartTimestamp << ")" << endl;
 #endif
 			anEvent = getFirstEvent();
 
 			collectEvent(anEvent);
 		}
-		else if (windowEndTimestamp_ns < latestAbsoluteMdppTimestamp_ns)
+		else if (windowEndTimestamp < latestAbsoluteMdppTimestamp)
 		{
 #ifdef DEBUG
 				cout << "== Collecting done! Sending ==" << endl;
@@ -460,11 +481,11 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 		while (!hitDeque.empty()) {
 			MDPPSCPSRO &anEvent = peekFirstEvent();
 
-			if (latestAbsoluteMdppTimestamp_ns - getAbsoluteMdppTimestamp_ns(anEvent) > windowStart_ns) {
+			if (latestAbsoluteMdppTimestamp - getAbsoluteMdppTimestamp(anEvent) > windowStart) {
 #ifdef DEBUG
 				cout << "== Too far from the window start ==" << endl;
-				cout << "                    MDPP timestamp in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) << endl;
-				cout << "                  latest timestamp in ns: " << latestAbsoluteMdppTimestamp_ns << endl;
+				cout << "                    MDPP timestamp in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) << " (" << getAbsoluteMdppTimestamp(anEvent) << ")" << endl;
+				cout << "                  latest timestamp in ns: " << latestAbsoluteMdppTimestamp_ns << " (" << latestAbsoluteMdppTimestamp << ")" << endl;
 #endif
 				anEvent = getFirstEvent();
 				CPhysicsEventItem &packedEvent = *pack(anEvent);
@@ -545,6 +566,8 @@ int main(int argc, char **argv)
 	triggerChannel = atoi(argv[3]);
 	windowStart_ns = atof(argv[4]);
 	windowWidth_ns = atof(argv[5]);
+	windowStart    = windowStart_ns*1000/MDPP_TDC_UNIT;
+	windowWidth    = windowWidth_ns*1000/MDPP_TDC_UNIT;
 
 	// The loop below consumes items from the ring buffer until
 	// all are used up.  The use of an std::unique_ptr ensures that the
