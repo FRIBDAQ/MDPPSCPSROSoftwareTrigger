@@ -4,4 +4,4 @@ lappend auto_path $here
 
 package require MDPPSCPSROSoftTrigger
 
-MDPPSCPSROSoftTrigger::register 12 15000 30000 ;# Trigger Ch: 12, Window: [-15, 15] us
+MDPPSCPSROSoftTrigger::register 0 15000 22000 ;# Trigger Ch: 12, Window: [-15, 15] us

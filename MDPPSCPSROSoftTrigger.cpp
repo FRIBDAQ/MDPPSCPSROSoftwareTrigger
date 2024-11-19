@@ -36,7 +36,8 @@
 #include "MDPPSCPSRO.h"
 
 #define EXTERNAL_TIMESTAMP_MAX   0xFFFFFFFF // 32bits
-#define EXTERNAL_CLOCK_PERIOD_NS 62.5  // ns (16MHz)
+#define EXTERNAL_CLOCK_PERIOD_NS 100.0  // ns (10MHz)
+//#define EXTERNAL_CLOCK_PERIOD_NS  62.5  // ns (16MHz)
 #define MDPP_TDC_UNIT            24.41 // ps
 #define MDPP_TDC_MAX             0x3FFFFFFF
 #define MDPP_TIMESTAMP_MAX_NS    MDPP_TDC_MAX*MDPP_TDC_UNIT/1000.
@@ -95,12 +96,12 @@ void usage(std::ostream &o, const char *msg, const char *program)
 {
 	o << msg << std::endl;
 	o << "= Usage:\n";
-	o << "  " << program << " uri outringPrefix\n";
-	o << "        in ring uri - the file: or tcp: URI that describes where data comes from\n";
-	o << "       out ring uri - the file: or tcp: URI that describes where data goes out to\n";
-	o << "    trigger channel - a channel number to create trigger window\n";
-	o << "       window start - trigger window start time in ns (WS)\n";
-	o << "       window width - trigger window width in ns (WW)\n\n";
+	o << "  " << program << " inRingURI outRingURI trigCh winStart winWidth\n";
+	o << "        inRingURI - the file: or tcp: URI that describes where data comes from\n";
+	o << "       outRingURI - the file: or tcp: URI that describes where data goes out to\n";
+	o << "           trigCh - a channel number to create trigger window\n";
+	o << "         winStart - trigger window start time in ns (WS)\n";
+	o << "         winWidth - trigger window width in ns (WW)\n\n";
 	o << "       Trigger window is created as (t_ch - WS, t_ch - WS + WW).\n";
 
 	std::exit(EXIT_FAILURE);
@@ -139,9 +140,6 @@ MDPPSCPSRO &unpack(CRingItem &item) {
 
 	void *p = item.getBodyPointer();
 
-//	anEvent.eventtimestamp = item.getEventTimestamp();
-//	anEvent.sourceid = item.getSourceId();
-	
 	uint16_t *vmusbHeader = reinterpret_cast<uint16_t *>(p);
 	anEvent.stackid = ((*vmusbHeader)&0xe000) >> 13;
 	anEvent.bodysize = (*vmusbHeader)&0x0FFF;
@@ -184,7 +182,7 @@ MDPPSCPSRO &unpack(CRingItem &item) {
 	anEvent.ch       = (*firstItem   &   0x7C0000) >> 18;
 	anEvent.pileup   = (*firstItem   &    0x20000) >> 17;
 	anEvent.overflow = (*firstItem   &    0x10000) >> 16;
-	anEvent.adc      =  *firstItem;
+	anEvent.adc      =  *firstItem   &     0xffff;
 
 #ifdef DEBUG
 	cout << "moduleid: " << anEvent.moduleid << endl;
@@ -209,6 +207,7 @@ MDPPSCPSRO &unpack(CRingItem &item) {
 	anEvent.timestamp = *secondItem&0x3FFFFFFF;
 
 #ifdef DEBUG
+	cout << "rolloverCounter: " << anEvent.rollovercounter << endl;
 	cout << "timestamp: " << anEvent.timestamp << endl;
 #endif
 
@@ -332,6 +331,8 @@ MDPPSCPSRO &peekFirstEvent()
 void collectEvent(MDPPSCPSRO &anEvent)
 {
 	eventQueue.push(&anEvent);
+
+	dataCollecting = true;
 }
 
 void sendCollection(CDataSink &sink)
@@ -399,20 +400,32 @@ void sendCollection(CDataSink &sink)
 	newItem.updateSize();
 
 	send(sink, newItem);
+
+	dataCollecting = false;
+}
+
+void updateTriggerWindow(MDPPSCPSRO &triggerEvent)
+{
+	windowStartTimestamp    = getAbsoluteMdppTimestamp(triggerEvent) - windowStart;
+	windowStartTimestamp_ns = getAbsoluteMdppTimestamp_ns(triggerEvent) - windowStart_ns;
+	if (getAbsoluteMdppTimestamp(triggerEvent) < windowStart) {
+		windowStartTimestamp    = 0;
+		windowStartTimestamp_ns = 0;
+	}
+	windowEndTimestamp    = windowStartTimestamp + windowWidth;
+	windowEndTimestamp_ns = windowStartTimestamp_ns + windowWidth_ns;
 }
 
 void sending(CDataSink &sink, bool isTriggerChannel)
 {
 	if (isTriggerChannel && !dataCollecting) {
 		MDPPSCPSRO &triggerEvent = getLastEvent();
-		windowStartTimestamp    = getAbsoluteMdppTimestamp(triggerEvent) - windowStart;
-		windowStartTimestamp_ns = getAbsoluteMdppTimestamp_ns(triggerEvent) - windowStart_ns;
-		if (getAbsoluteMdppTimestamp(triggerEvent) < windowStart) {
-			windowStartTimestamp    = 0;
-			windowStartTimestamp_ns = 0;
-		}
-		windowEndTimestamp    = windowStartTimestamp + windowWidth;
-		windowEndTimestamp_ns = windowStartTimestamp_ns + windowWidth_ns;
+
+		updateTriggerWindow(triggerEvent);
+
+#ifdef DEBUG
+				cout << "== New trigger event detected ==" << endl;
+#endif
 
 		while (!hitDeque.empty()) {
 			MDPPSCPSRO &anEvent = getFirstEvent();
@@ -437,7 +450,9 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 			}
 		 	else 
 			{
-				cerr << "== This shouldn't be happening!" << endl;
+				cerr << "== This shouldn't be happening! 1 ==" << endl;
+				cerr << "                      Window start in ns: " << windowStartTimestamp_ns << " (" << windowStartTimestamp << ")" << endl;
+				cerr << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) - windowStartTimestamp_ns << " (" << getAbsoluteMdppTimestamp(anEvent) - windowStartTimestamp << ")" << endl;
 
 				break;
 			}
@@ -449,8 +464,6 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 #endif
 
 		collectEvent(triggerEvent);
-
-		dataCollecting = true;
 	} else if (dataCollecting) {
 		MDPPSCPSRO &anEvent = peekFirstEvent();
 
@@ -469,19 +482,22 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 #ifdef DEBUG
 				cout << "== Collecting done! Sending ==" << endl;
 #endif
-			dataCollecting = false;
-
 			sendCollection(sink);
+
+			sending(sink, anEvent.ch == triggerChannel);
 		}
 		else
 		{
-			cerr << "== This shouldn't be happening! ==" << endl;
+			cerr << "== This shouldn't be happening! 2 ==" << endl;
+			cerr << "                      Window start in ns: " << windowStartTimestamp_ns << " (" << windowStartTimestamp << ")" << endl;
+			cerr << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) - windowStartTimestamp_ns << " (" << getAbsoluteMdppTimestamp(anEvent) - windowStartTimestamp << ")" << endl;
 		}
 	}	else {
 		while (!hitDeque.empty()) {
 			MDPPSCPSRO &anEvent = peekFirstEvent();
 
-			if (latestAbsoluteMdppTimestamp - getAbsoluteMdppTimestamp(anEvent) > windowStart) {
+			if (latestAbsoluteMdppTimestamp - getAbsoluteMdppTimestamp(anEvent) > windowStart)
+			{
 #ifdef DEBUG
 				cout << "== Too far from the window start ==" << endl;
 				cout << "                    MDPP timestamp in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) << " (" << getAbsoluteMdppTimestamp(anEvent) << ")" << endl;
@@ -541,6 +557,7 @@ int main(int argc, char **argv)
 	CDataSource* pDataSource;
 	try {
 		pDataSource = CDataSourceFactory::makeSource(argv[1], sample, exclude);
+		std::cout << "==  Connecting to the input RingBuffer: " << argv[1] << std::endl;
 	}
 	catch (CException &e) {
 		std::cerr << "Failed to open ring source\b" << std::endl;
@@ -556,6 +573,7 @@ int main(int argc, char **argv)
 	try {
 		CDataSinkFactory factory;
 		pSink = factory.makeSink(argv[2]);
+		std::cout << "== Connecting to the output RingBuffer: " << argv[2] << std::endl;
 	}
 	catch (CException& e) {
 		std::cerr << "Failed to create data sink: ";
@@ -569,10 +587,18 @@ int main(int argc, char **argv)
 	windowStart    = windowStart_ns*1000/MDPP_TDC_UNIT;
 	windowWidth    = windowWidth_ns*1000/MDPP_TDC_UNIT;
 
+	std::cout << std::endl;
+	std::cout << "==  Software trigger channel: " << triggerChannel << std::endl;
+	std::cout << "== Trigger window start (ns): " << windowStart_ns << std::endl;
+	std::cout << "== Trigger window width (ns): " << windowWidth_ns << std::endl;
+	std::cout << std::endl;
+
 	// The loop below consumes items from the ring buffer until
 	// all are used up.  The use of an std::unique_ptr ensures that the
 	// dynamically created ring items we get from the data source are
 	// automatically deleted when we exit the block in which it's created.
+
+	std::cout << "== Starting processing software trigger" << std::endl;
 
 	CRingItem *pItem;
 	while ((pItem = pDataSource -> getItem() )) {
@@ -605,13 +631,17 @@ int main(int argc, char **argv)
 			hitDeque.push_back(&anEvent);
 			updateTimestamps(anEvent);
 			sending(*sink, anEvent.ch == triggerChannel);
-		} else if (item.type() == END_RUN) {
+		} else if (item.type() == END_RUN || item.type() == ABNORMAL_ENDRUN) {
 			emptyingQueues(*sink);
 			send(*sink, item);
+		} else if (item.type() == PHYSICS_EVENT_COUNT) {
+			std::unique_ptr<CRingItem> upItem(pItem);
 		} else {
 			send(*sink, item);
 		}
 	}
+
+	std::cout << "== Ending processing software trigger" << std::endl;
 	
 	// We can only fall through here for file data sources... normal exit
 	std::exit(EXIT_SUCCESS);

@@ -6,12 +6,12 @@ vmusb config vme -scalera nimi2 -readscalers true -incremental false
 #vmusb config vme -forcescalerdump true
 
 set tfintdiff         [list 67 20 77 20  20 20 20 20]
-set pz                [list 2040 0xFFFF 0xFFFF 0xFFFF  0xFFFF 0xFFFF 0xFFFF 0xFFFF \
+set pz                [list 2040 2048 0xFFFF 0xFFFF  0xFFFF 0xFFFF 0xFFFF 0xFFFF \
                             0xFFFF 0xFFFF 0xFFFF 0xFFFF  1840 0xFFFF 0xFFFF 0xFFFF \
                             0xFFFF 0xFFFF 0xFFFF 0xFFFF  0xFFFF 0xFFFF 0xFFFF 0xFFFF \
                             0xFFFF 0xFFFF 0xFFFF 0xFFFF  0xFFFF 0xFFFF 0xFFFF 0xFFFF]
 set gain              [list 1000 1000 1000 100  200 200 1000 1000]
-set threshold         [list 2050 0xFFFF 1000 2000  1400 900 1600 5000 \
+set threshold         [list 2050 2050 1000 2000  1400 900 1600 5000 \
                             1400 0xFFFF 0xFFFF 0xFFFF  1000 0xFFFF 0xFFFF 0xFFFF \
                             0xFFFF 0xFFFF 0xFFFF 0xFFFF  0xFFFF 0xFFFF 0xFFFF 0xFFFF \
                             0xFFFF 0xFFFF 0xFFFF 500  0xFFFF 0xFFFF 0xFFFF 500]
@@ -36,8 +36,9 @@ if {[info globals SpecTclHome] ne ""} {
 ### REQUIRED FOR SCP SRO Software Trigger #####
 
 mdpp32scp create scp -base 0x22220000 -id 0 -ipl 1 -vector 0 -irqsource event -irqeventthreshold 1
+# outputformat 4 REQUIRED FOR SCP SRO Software Trigger #####
 mdpp32scp config scp -tfintdiff $tfintdiff \
-                     -outputformat 4 \   ;### REQUIRED FOR SCP SRO Software Trigger #####
+                     -outputformat 4 \
                      -pz $pz \
                      -gain $gain \
                      -threshold $threshold \
@@ -67,12 +68,22 @@ if {! $spectcl} {
 }
 ### REQUIRED FOR SCP SRO Software Trigger #####
 
-set adcChannels(scp) [list scp.00 scp.01 scp.02 scp.03 scp.04 scp.05 scp.06 scp.07 \
-                           scp.08 scp.09 scp.10 scp.11 scp.12 scp.13 scp.14 scp.15 \
-                           scp.16 scp.17 scp.18 scp.19 scp.20 scp.21 scp.22 scp.23 \
-                           scp.24 scp.25 scp.26 scp.27 scp.28 scp.29 scp.30 scp.31 \
-                           scp.32 scp.33 scp.34 scp.35]
-                           # 32: rollover count
-                           # 33: 24.41ps timestamp
-													 # 34: vme scaler 1
-													 # 35: vme scaler 2
+set adcChannels(scp) [list scp.000 scp.001 scp.002 scp.003 scp.004 scp.005 scp.006 scp.007 \
+                           scp.008 scp.009 scp.010 scp.011 scp.012 scp.013 scp.014 scp.015 \
+                           scp.016 scp.017 scp.018 scp.019 scp.020 scp.021 scp.022 scp.023 \
+                           scp.024 scp.025 scp.026 scp.027 scp.028 scp.029 scp.030 scp.031 \
+                           scp.032 scp.033 scp.034 scp.035 scp.036 scp.037 scp.038 scp.039 \
+                           scp.040 scp.041 scp.042 scp.043 scp.044 scp.045 scp.046 scp.047 \
+                           scp.048 scp.049 scp.050 scp.051 scp.052 scp.053 scp.054 scp.055 \
+                           scp.056 scp.057 scp.058 scp.059 scp.060 scp.061 scp.062 scp.063 \
+                           scp.064 scp.065 scp.066 scp.067 scp.068 scp.069 scp.070 scp.071 \
+                           scp.072 scp.073 scp.074 scp.075 scp.076 scp.077 scp.078 scp.079 \
+                           scp.080 scp.081 scp.082 scp.083 scp.084 scp.085 scp.086 scp.087 \
+                           scp.088 scp.089 scp.090 scp.091 scp.092 scp.093 scp.094 scp.095 \
+                           scp.096 scp.097 scp.098 scp.099 scp.100 scp.101 scp.102 scp.103 \
+                           scp.104 scp.105 scp.106 scp.107 scp.108 scp.109 scp.110 scp.111 \
+                           scp.112 scp.113 scp.114 scp.115 scp.116 scp.117 scp.118 scp.119 \
+                           scp.120 scp.121 scp.122 scp.123 scp.124 scp.125 scp.126 scp.127]
+                           # 32-63: rollover count | 24.41ps timestamp for 0-31
+                           # 64-95: timestamp from window start or 0
+                           # 96-127: vme scaler 1 for 0-31
