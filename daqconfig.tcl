@@ -5,20 +5,20 @@ vmusb config vme -scalera nimi2 -readscalers true -incremental false
 #vmusb config vme -bufferlength evtcount -eventsperbuffer 1
 #vmusb config vme -forcescalerdump true
 
-set tfintdiff         [list 67 20 77 20  20 20 20 20]
-set pz                [list 2040 2048 0xFFFF 0xFFFF  0xFFFF 0xFFFF 0xFFFF 0xFFFF \
+set tfintdiff         [list 20 20 77 20  20 20 20 20]
+set pz                [list 2040 2048 0xFFFF 0xFFFF  2040 0xFFFF 0xFFFF 0xFFFF \
                             0xFFFF 0xFFFF 0xFFFF 0xFFFF  1840 0xFFFF 0xFFFF 0xFFFF \
                             0xFFFF 0xFFFF 0xFFFF 0xFFFF  0xFFFF 0xFFFF 0xFFFF 0xFFFF \
                             0xFFFF 0xFFFF 0xFFFF 0xFFFF  0xFFFF 0xFFFF 0xFFFF 0xFFFF]
-set gain              [list 1000 1000 1000 100  200 200 1000 1000]
-set threshold         [list 2050 2050 1000 2000  1400 900 1600 5000 \
+set gain              [list 100 100 1000 100  200 200 1000 1000]
+set threshold         [list 2050 2050 1000 2000  2050 900 1600 5000 \
                             1400 0xFFFF 0xFFFF 0xFFFF  1000 0xFFFF 0xFFFF 0xFFFF \
                             0xFFFF 0xFFFF 0xFFFF 0xFFFF  0xFFFF 0xFFFF 0xFFFF 0xFFFF \
                             0xFFFF 0xFFFF 0xFFFF 500  0xFFFF 0xFFFF 0xFFFF 500]
 set shapingtime       [list 140 140 140 160  200 200 200 200]
 set blr               [list 2 2 2 2  2 2 2 2]
-set signalrisetime    [list 16 0 0 124  16 16 16 16]
-set resettime         [list 0 1000 0 0  0 0 0 0]
+set signalrisetime    [list 16 16 0 124  16 16 16 16]
+set resettime         [list 16 16 0 0  0 0 0 0]
 set windowStart        16380;#0x3F80
 set windowWidth         10000
 set firstHit            0

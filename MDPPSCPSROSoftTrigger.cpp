@@ -35,16 +35,16 @@
 
 #include "MDPPSCPSRO.h"
 
-#define EXTERNAL_TIMESTAMP_MAX   0xFFFFFFFF // 32bits
-#define EXTERNAL_CLOCK_PERIOD_NS 100.0  // ns (10MHz)
-//#define EXTERNAL_CLOCK_PERIOD_NS  62.5  // ns (16MHz)
-#define MDPP_TDC_UNIT            24.41 // ps
-#define MDPP_TDC_MAX             0x3FFFFFFF
-#define MDPP_TIMESTAMP_MAX_NS    MDPP_TDC_MAX*MDPP_TDC_UNIT/1000.
+uint64_t EXTERNAL_TIMESTAMP_MAX = 0xFFFFFFFF; // 32bits
+double EXTERNAL_CLOCK_PERIOD_NS = 100.0; // ns (10MHz)
+//double EXTERNAL_CLOCK_PERIOD_NS = 62.5; // ns (16MHz)
+double MDPP_TDC_UNIT =          24.41; // ps
+uint32_t MDPP_TDC_MAX =           0x3FFFFFFF;
+double MDPP_TIMESTAMP_MAX_NS =  static_cast<double>(MDPP_TDC_MAX)*MDPP_TDC_UNIT/1000.;
 
 #define NUM_CHANNEL 32
 
-//#define DEBUG
+#define DEBUG
 
 using std::queue;
 using std::deque;
@@ -52,13 +52,19 @@ using std::cout;
 using std::cerr;
 using std::endl;
 
+class MDPPSCPSROSoftTrigger {
+	public:
+		MDPPSCPSROSoftTrigger() {};
+		~MDPPSCPSROSoftTrigger() {};
+
+	public:
     bool timeSet = false;
 
   double     timestamp_ns = 0;
-uint64_t prevTimestamp_ns = 0;
+  double prevTimestamp_ns = 0;
 uint64_t externalTimestampRolloverCounter = 0;
 
-uint64_t  mdppTimestampRef    = 0;  // in 24.41ps
+uint64_t     mdppTimestampRef = 0;  // in 24.41ps
   double     mdppTimestamp_ns = 0;
   double prevMdppTimestamp_ns = 0;
 uint64_t latestAbsoluteMdppTimestamp    = 0;
@@ -84,6 +90,26 @@ uint64_t    windowEndTimestamp    = 0;
 deque<MDPPSCPSRO *> hitDeque;
 queue<MDPPSCPSRO *> eventQueue;
 
+	public:
+double getTimestamp_ns(MDPPSCPSRO &anEvent);
+uint64_t getMdppTimestamp(MDPPSCPSRO &anEvent);
+double getMdppTimestamp_ns(MDPPSCPSRO &anEvent);
+uint64_t getAbsoluteMdppTimestamp(MDPPSCPSRO &anEvent);
+double getAbsoluteMdppTimestamp_ns(MDPPSCPSRO &anEvent);
+MDPPSCPSRO &unpack(CRingItem &item);
+CPhysicsEventItem *pack(MDPPSCPSRO &anEvent);
+void send(CDataSink &sink, CRingItem &item);
+void updateTimestamps(MDPPSCPSRO &anEvent);
+MDPPSCPSRO &getLastEvent();
+MDPPSCPSRO &getFirstEvent();
+MDPPSCPSRO &peekFirstEvent();
+void collectEvent(MDPPSCPSRO &anEvent);
+void sendCollection(CDataSink &sink);
+void updateTriggerWindow(MDPPSCPSRO &triggerEvent);
+void sending(CDataSink &sink, bool isTriggerChannel);
+void emptyingQueues(CDataSink &sink);
+};
+
 /**
  * Usage:
  *    This outputs an error message that shows how the program should be used
@@ -107,32 +133,33 @@ void usage(std::ostream &o, const char *msg, const char *program)
 	std::exit(EXIT_FAILURE);
 }
 
-double getTimestamp_ns(MDPPSCPSRO &anEvent)
+double MDPPSCPSROSoftTrigger::getTimestamp_ns(MDPPSCPSRO &anEvent)
 {
-	return (externalTimestampRolloverCounter*EXTERNAL_TIMESTAMP_MAX + anEvent.externaltimestamp)*EXTERNAL_CLOCK_PERIOD_NS - refDiff_ns;
+	return static_cast<double>(static_cast<uint64_t>(externalTimestampRolloverCounter)*EXTERNAL_TIMESTAMP_MAX + static_cast<uint64_t>(anEvent.externaltimestamp))*EXTERNAL_CLOCK_PERIOD_NS - refDiff_ns;
 }
 
-uint32_t getMdppTimestamp(MDPPSCPSRO &anEvent)
+uint64_t MDPPSCPSROSoftTrigger::getMdppTimestamp(MDPPSCPSRO &anEvent)
 {
-	return anEvent.timestamp;
+	return static_cast<uint64_t>(anEvent.timestamp);
 }
 
-double getMdppTimestamp_ns(MDPPSCPSRO &anEvent)
+double MDPPSCPSROSoftTrigger::getMdppTimestamp_ns(MDPPSCPSRO &anEvent)
 {
-	return anEvent.timestamp*MDPP_TDC_UNIT/1000.;
+	return static_cast<double>(anEvent.timestamp)*MDPP_TDC_UNIT/1000.;
 }
 
-uint64_t getAbsoluteMdppTimestamp(MDPPSCPSRO &anEvent)
+uint64_t MDPPSCPSROSoftTrigger::getAbsoluteMdppTimestamp(MDPPSCPSRO &anEvent)
 {
-	return (anEvent.rollovercounter << 30) | getMdppTimestamp(anEvent);
+	uint64_t absoluteMdppTimestamp = (static_cast<uint64_t>(anEvent.rollovercounter) << 30) | getMdppTimestamp(anEvent);
+	return absoluteMdppTimestamp;
 }
 
-double getAbsoluteMdppTimestamp_ns(MDPPSCPSRO &anEvent)
+double MDPPSCPSROSoftTrigger::getAbsoluteMdppTimestamp_ns(MDPPSCPSRO &anEvent)
 {
-	return anEvent.rollovercounter*MDPP_TIMESTAMP_MAX_NS + getMdppTimestamp_ns(anEvent);
+	return static_cast<double>(getAbsoluteMdppTimestamp(anEvent))*MDPP_TDC_UNIT/1000.;
 }
 
-MDPPSCPSRO &unpack(CRingItem &item) {
+MDPPSCPSRO &MDPPSCPSROSoftTrigger::unpack(CRingItem &item) {
 	std::unique_ptr<CRingItem> pItem(&item);
 
 	MDPPSCPSRO *pAnEvent = new MDPPSCPSRO();
@@ -214,7 +241,7 @@ MDPPSCPSRO &unpack(CRingItem &item) {
 	return anEvent;
 }
 
-CPhysicsEventItem *pack(MDPPSCPSRO &anEvent)
+CPhysicsEventItem *MDPPSCPSROSoftTrigger::pack(MDPPSCPSRO &anEvent)
 {
 	std::unique_ptr<MDPPSCPSRO> pAnEvent(&anEvent);
 
@@ -271,23 +298,26 @@ CPhysicsEventItem *pack(MDPPSCPSRO &anEvent)
 	return newItem;
 }
 
-void send(CDataSink &sink, CRingItem &item)
+void MDPPSCPSROSoftTrigger::send(CDataSink &sink, CRingItem &item)
 {
 	std::unique_ptr<CRingItem> pItem(&item);
 
 	sink.putItem(*pItem);
 }
 
-void updateTimestamps(MDPPSCPSRO &anEvent)
+void MDPPSCPSROSoftTrigger::updateTimestamps(MDPPSCPSRO &anEvent)
 {
 	prevTimestamp_ns = timestamp_ns;
 			timestamp_ns = getTimestamp_ns(anEvent);
 	double timestampDiff_ns = timestamp_ns - prevTimestamp_ns;
+	if (!timeSet) {
+		timestampDiff_ns = 0;
+	}
 
 	if (timestampDiff_ns < 0) {
 		while (timestampDiff_ns < 0) {
 			externalTimestampRolloverCounter += 1;
-			timestamp_ns = getTimestamp_ns(anEvent);
+			timestamp_ns  = getTimestamp_ns(anEvent);
 			timestampDiff_ns = timestamp_ns - prevTimestamp_ns;
 		}
 	}
@@ -295,19 +325,31 @@ void updateTimestamps(MDPPSCPSRO &anEvent)
 	prevMdppTimestamp_ns = mdppTimestamp_ns;
 			mdppTimestamp_ns = getMdppTimestamp_ns(anEvent);
 	double mdppTimestampDiff_ns = mdppTimestamp_ns - prevMdppTimestamp_ns;
+	if (!timeSet) {
+		mdppTimestampDiff_ns = 0;
+	}
 
 	if (mdppTimestampDiff_ns < 0) {
 		uint64_t rolloverCounter = timestampDiff_ns/MDPP_TIMESTAMP_MAX_NS;
-		mdppRolloverCounter += rolloverCounter + 1;
-		mdppTimestampDiff_ns += mdppRolloverCounter*MDPP_TIMESTAMP_MAX_NS;
+		mdppTimestampDiff_ns = -mdppTimestampDiff_ns;
+
+#ifdef DEBUG
+				cerr << "== Updating time ==" << endl;
+				cerr << "                    timestamp diff in ns: " << timestampDiff_ns << endl;
+				cerr << "               MDPP timestamp diff in ns: " << mdppTimestampDiff_ns << endl;
+#endif
+
+		if (!(mdppTimestampDiff_ns > 0.8*timestampDiff_ns && mdppTimestampDiff_ns < 1.2*timestampDiff_ns)) {
+			mdppRolloverCounter += rolloverCounter + 1;
+		}
 	}
 
 	anEvent.rollovercounter = mdppRolloverCounter;
-	latestAbsoluteMdppTimestamp    = getAbsoluteMdppTimestamp(anEvent);
-	latestAbsoluteMdppTimestamp_ns = getAbsoluteMdppTimestamp_ns(anEvent);
+	latestAbsoluteMdppTimestamp    = std::max(getAbsoluteMdppTimestamp(anEvent), latestAbsoluteMdppTimestamp);
+	latestAbsoluteMdppTimestamp_ns = std::max(getAbsoluteMdppTimestamp_ns(anEvent), latestAbsoluteMdppTimestamp_ns);
 }
 
-MDPPSCPSRO &getLastEvent()
+MDPPSCPSRO &MDPPSCPSROSoftTrigger::getLastEvent()
 {
 	MDPPSCPSRO *pAnEvent = hitDeque.back();
 	hitDeque.pop_back();
@@ -315,7 +357,7 @@ MDPPSCPSRO &getLastEvent()
 	return *pAnEvent;
 }
 
-MDPPSCPSRO &getFirstEvent()
+MDPPSCPSRO &MDPPSCPSROSoftTrigger::getFirstEvent()
 {
 	MDPPSCPSRO *pAnEvent = hitDeque.front();
 	hitDeque.pop_front();
@@ -323,19 +365,19 @@ MDPPSCPSRO &getFirstEvent()
 	return *pAnEvent;
 }
 
-MDPPSCPSRO &peekFirstEvent()
+MDPPSCPSRO &MDPPSCPSROSoftTrigger::peekFirstEvent()
 {
 	return *hitDeque.front();
 }
 
-void collectEvent(MDPPSCPSRO &anEvent)
+void MDPPSCPSROSoftTrigger::collectEvent(MDPPSCPSRO &anEvent)
 {
 	eventQueue.push(&anEvent);
 
 	dataCollecting = true;
 }
 
-void sendCollection(CDataSink &sink)
+void MDPPSCPSROSoftTrigger::sendCollection(CDataSink &sink)
 {
 	MDPPSCPSRO &anEvent = *eventQueue.front();
 
@@ -370,7 +412,7 @@ void sendCollection(CDataSink &sink)
 		std::memcpy(dest, &firstItem, 4);
 		dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
-		uint32_t timestampFromStart = getAbsoluteMdppTimestamp(anEvent) - windowStartTimestamp;
+		uint64_t timestampFromStart = (getAbsoluteMdppTimestamp(anEvent) - windowStartTimestamp)&0xFFFFFFFF;
 
 		std::memcpy(dest, &timestampFromStart, 4);
 		dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
@@ -404,19 +446,19 @@ void sendCollection(CDataSink &sink)
 	dataCollecting = false;
 }
 
-void updateTriggerWindow(MDPPSCPSRO &triggerEvent)
+void MDPPSCPSROSoftTrigger::updateTriggerWindow(MDPPSCPSRO &triggerEvent)
 {
 	windowStartTimestamp    = getAbsoluteMdppTimestamp(triggerEvent) - windowStart;
-	windowStartTimestamp_ns = getAbsoluteMdppTimestamp_ns(triggerEvent) - windowStart_ns;
+	windowStartTimestamp_ns = static_cast<double>(windowStartTimestamp)*MDPP_TDC_UNIT/1000.;
 	if (getAbsoluteMdppTimestamp(triggerEvent) < windowStart) {
 		windowStartTimestamp    = 0;
 		windowStartTimestamp_ns = 0;
 	}
 	windowEndTimestamp    = windowStartTimestamp + windowWidth;
-	windowEndTimestamp_ns = windowStartTimestamp_ns + windowWidth_ns;
+	windowEndTimestamp_ns = static_cast<double>(windowEndTimestamp)*MDPP_TDC_UNIT/1000.;
 }
 
-void sending(CDataSink &sink, bool isTriggerChannel)
+void MDPPSCPSROSoftTrigger::sending(CDataSink &sink, bool isTriggerChannel)
 {
 	if (isTriggerChannel && !dataCollecting) {
 		MDPPSCPSRO &triggerEvent = getLastEvent();
@@ -425,6 +467,9 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 
 #ifdef DEBUG
 				cout << "== New trigger event detected ==" << endl;
+				cout << "                           hitDeque size: " << hitDeque.size() << endl;
+				cout << "            Window start timestamp in ns: " << windowStartTimestamp_ns << " (" << windowStartTimestamp << ")" << endl;
+				cout << "           MDPP absolute timestamp in ns: " << getAbsoluteMdppTimestamp_ns(triggerEvent) << " (" << getAbsoluteMdppTimestamp(triggerEvent) << ")" << endl;
 #endif
 
 		while (!hitDeque.empty()) {
@@ -451,8 +496,11 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 		 	else 
 			{
 				cerr << "== This shouldn't be happening! 1 ==" << endl;
-				cerr << "                      Window start in ns: " << windowStartTimestamp_ns << " (" << windowStartTimestamp << ")" << endl;
 				cerr << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) - windowStartTimestamp_ns << " (" << getAbsoluteMdppTimestamp(anEvent) - windowStartTimestamp << ")" << endl;
+				cerr << "                      Window start in ns: " << windowStartTimestamp_ns << " (" << windowStartTimestamp << ")" << endl;
+				cout << "           MDPP absolute timestamp in ns: " << getAbsoluteMdppTimestamp_ns(triggerEvent) << " (" << getAbsoluteMdppTimestamp(triggerEvent) << ")" << endl;
+				cerr << "                   MDPP rollover counter: " << anEvent.rollovercounter << endl;
+				cerr << "                          MDPP timestamp: " << anEvent.timestamp << endl;
 
 				break;
 			}
@@ -461,19 +509,29 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 #ifdef DEBUG
 				cout << "== Collected trigger event ==" << endl;
 				cout << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(triggerEvent) - windowStartTimestamp_ns << " (" << getAbsoluteMdppTimestamp(triggerEvent) - windowStartTimestamp << ")" << endl;
+				cout << "                    MDPP timestamp in ns: " << getAbsoluteMdppTimestamp_ns(triggerEvent) << " (" << getAbsoluteMdppTimestamp(triggerEvent) << ")" << endl;
 #endif
 
 		collectEvent(triggerEvent);
 	} else if (dataCollecting) {
 		MDPPSCPSRO &anEvent = peekFirstEvent();
 
+#ifdef DEBUG
+				cout << "== Collecting? ==" << endl;
+				cout << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) - windowStartTimestamp_ns << " (" << getAbsoluteMdppTimestamp(anEvent) - windowStartTimestamp << ")" << endl;
+				cout << "                    MDPP timestamp in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) << " (" << getAbsoluteMdppTimestamp(anEvent) << ")" << endl;
+				cout << "             windowStart timestamp in ns: " << windowStartTimestamp_ns << " (" << windowStartTimestamp << ")" << endl;
+				cout << "               windowEnd timestamp in ns: " << windowEndTimestamp_ns << " (" << windowEndTimestamp << ")" << endl;
+#endif
 		if (getAbsoluteMdppTimestamp(anEvent) >= windowStartTimestamp && getAbsoluteMdppTimestamp(anEvent) <= windowEndTimestamp)
 		{
+			anEvent = getFirstEvent();
+
 #ifdef DEBUG
 				cout << "== Collected after trigger event ==" << endl;
 				cout << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) - windowStartTimestamp_ns << " (" << getAbsoluteMdppTimestamp(anEvent) - windowStartTimestamp << ")" << endl;
+				cout << "                    MDPP timestamp in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) << " (" << getAbsoluteMdppTimestamp(anEvent) << ")" << endl;
 #endif
-			anEvent = getFirstEvent();
 
 			collectEvent(anEvent);
 		}
@@ -484,13 +542,20 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 #endif
 			sendCollection(sink);
 
+#ifdef DEBUG
+				cout << "== Checking if there's trigger event left ==" << endl;
+#endif
+
 			sending(sink, anEvent.ch == triggerChannel);
 		}
 		else
 		{
 			cerr << "== This shouldn't be happening! 2 ==" << endl;
-			cerr << "                      Window start in ns: " << windowStartTimestamp_ns << " (" << windowStartTimestamp << ")" << endl;
 			cerr << "  MDPP timestamp from window start in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) - windowStartTimestamp_ns << " (" << getAbsoluteMdppTimestamp(anEvent) - windowStartTimestamp << ")" << endl;
+			cerr << "                      Window start in ns: " << windowStartTimestamp_ns << " (" << windowStartTimestamp << ")" << endl;
+			cerr << "           MDPP absolute timestamp in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) << " (" << getAbsoluteMdppTimestamp(anEvent) << ")" << endl;
+			cerr << "                   MDPP rollover counter: " << anEvent.rollovercounter << endl;
+			cerr << "                          MDPP timestamp: " << anEvent.timestamp << endl;
 		}
 	}	else {
 		while (!hitDeque.empty()) {
@@ -513,7 +578,7 @@ void sending(CDataSink &sink, bool isTriggerChannel)
 	}
 }
 
-void emptyingQueues(CDataSink &sink)
+void MDPPSCPSROSoftTrigger::emptyingQueues(CDataSink &sink)
 {
 #ifdef DEBUG
 				cout << "== Emptying for ending ==" << endl;
@@ -542,6 +607,7 @@ void emptyingQueues(CDataSink &sink)
  */
 int main(int argc, char **argv)
 {
+	MDPPSCPSROSoftTrigger *core = new MDPPSCPSROSoftTrigger();
 	// Make sure we have enough command line parameters.
 
 	if (argc != 6) {
@@ -581,16 +647,16 @@ int main(int argc, char **argv)
 	}
 	std::unique_ptr<CDataSink> sink(pSink);
 
-	triggerChannel = atoi(argv[3]);
-	windowStart_ns = atof(argv[4]);
-	windowWidth_ns = atof(argv[5]);
-	windowStart    = windowStart_ns*1000/MDPP_TDC_UNIT;
-	windowWidth    = windowWidth_ns*1000/MDPP_TDC_UNIT;
+	core -> triggerChannel = atoi(argv[3]);
+	core -> windowStart_ns = atof(argv[4]);
+	core -> windowWidth_ns = atof(argv[5]);
+	core -> windowStart    = core -> windowStart_ns*1000/MDPP_TDC_UNIT;
+	core -> windowWidth    = core -> windowWidth_ns*1000/MDPP_TDC_UNIT;
 
 	std::cout << std::endl;
-	std::cout << "==  Software trigger channel: " << triggerChannel << std::endl;
-	std::cout << "== Trigger window start (ns): " << windowStart_ns << std::endl;
-	std::cout << "== Trigger window width (ns): " << windowWidth_ns << std::endl;
+	std::cout << "==  Software trigger channel: " << core -> triggerChannel << std::endl;
+	std::cout << "== Trigger window start (ns): " << core -> windowStart_ns << std::endl;
+	std::cout << "== Trigger window width (ns): " << core -> windowWidth_ns << std::endl;
 	std::cout << std::endl;
 
 	// The loop below consumes items from the ring buffer until
@@ -605,9 +671,9 @@ int main(int argc, char **argv)
 		CRingItem &item = *pItem;
 
 		if (item.type() == PHYSICS_EVENT) {
-			MDPPSCPSRO &anEvent = unpack(item);
+			MDPPSCPSRO &anEvent = core -> unpack(item);
 
-			if (!timeSet && anEvent.ch >= 0) {
+			if (!core -> timeSet && anEvent.ch >= 0) {
 				uint64_t mdppTimestampRef = anEvent.timestamp;
 
 				if (mdppTimestampRef < 41) {
@@ -620,24 +686,24 @@ int main(int argc, char **argv)
 					continue;
 				}
 
-				double timestampRef_ns = getTimestamp_ns(anEvent); // refDiff_ns = 0 at this point
-				double mdppTimestampRef_ns = getMdppTimestamp_ns(anEvent);
+				double timestampRef_ns = core -> getTimestamp_ns(anEvent); // refDiff_ns = 0 at this point
+				double mdppTimestampRef_ns = core -> getMdppTimestamp_ns(anEvent);
 
-				refDiff_ns = timestampRef_ns - mdppTimestampRef_ns;
+				core -> refDiff_ns = timestampRef_ns - mdppTimestampRef_ns;
 
-				timeSet = true;
+				core -> timeSet = true;
 			}
 
-			hitDeque.push_back(&anEvent);
-			updateTimestamps(anEvent);
-			sending(*sink, anEvent.ch == triggerChannel);
+			core -> hitDeque.push_back(&anEvent);
+			core -> updateTimestamps(anEvent);
+			core -> sending(*sink, anEvent.ch == core -> triggerChannel);
 		} else if (item.type() == END_RUN || item.type() == ABNORMAL_ENDRUN) {
-			emptyingQueues(*sink);
-			send(*sink, item);
+			core -> emptyingQueues(*sink);
+			core -> send(*sink, item);
 		} else if (item.type() == PHYSICS_EVENT_COUNT) {
 			std::unique_ptr<CRingItem> upItem(pItem);
 		} else {
-			send(*sink, item);
+			core -> send(*sink, item);
 		}
 	}
 

@@ -23,19 +23,19 @@ class MDPPSCPSRO {
 		~MDPPSCPSRO() {};
 
 	public:
-		uint64_t eventtimestamp;
+		uint32_t eventtimestamp;
 		int sourceid;
 		int stackid;
 		int bodysize;
-		uint64_t externaltimestamp;
+		uint32_t externaltimestamp;
 		int moduleid;
 		bool trigflag;
 		int ch;
 		bool pileup;
 		bool overflow;
-		unsigned int adc;
-		unsigned long rollovercounter;
-		unsigned long timestamp;
+		uint32_t adc;
+		uint32_t rollovercounter;
+		uint32_t timestamp;
 };
 
 #endif
