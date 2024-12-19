@@ -40,7 +40,9 @@ double EXTERNAL_CLOCK_PERIOD_NS = 100.0; // ns (10MHz)
 //double EXTERNAL_CLOCK_PERIOD_NS = 62.5; // ns (16MHz)
 double MDPP_TDC_UNIT =          24.41; // ps
 uint32_t MDPP_TDC_MAX =           0x3FFFFFFF;
-double MDPP_TIMESTAMP_MAX_NS =  static_cast<double>(MDPP_TDC_MAX)*MDPP_TDC_UNIT/1000.;
+double MDPP_TIMESTAMP_MAX_NS = static_cast<double>(MDPP_TDC_MAX)*MDPP_TDC_UNIT/1000.;
+double REVERSED_TEST_THRESHOLD = 100; // ns
+int ROLLOVER_LIMIT = 5;
 
 #define NUM_CHANNEL 32
 
@@ -310,43 +312,113 @@ void MDPPSCPSROSoftTrigger::updateTimestamps(MDPPSCPSRO &anEvent)
 	prevTimestamp_ns = timestamp_ns;
 			timestamp_ns = getTimestamp_ns(anEvent);
 	double timestampDiff_ns = timestamp_ns - prevTimestamp_ns;
-	if (!timeSet) {
-		timestampDiff_ns = 0;
-	}
 
-	if (timestampDiff_ns < 0) {
-		while (timestampDiff_ns < 0) {
-			externalTimestampRolloverCounter += 1;
-			timestamp_ns  = getTimestamp_ns(anEvent);
-			timestampDiff_ns = timestamp_ns - prevTimestamp_ns;
-		}
+	while (timestampDiff_ns < 0) {
+		externalTimestampRolloverCounter += 1;
+		timestamp_ns  = getTimestamp_ns(anEvent);
+		timestampDiff_ns = timestamp_ns - prevTimestamp_ns;
 	}
 
 	prevMdppTimestamp_ns = mdppTimestamp_ns;
 			mdppTimestamp_ns = getMdppTimestamp_ns(anEvent);
 	double mdppTimestampDiff_ns = mdppTimestamp_ns - prevMdppTimestamp_ns;
 	if (!timeSet) {
+		timestampDiff_ns = 0;
 		mdppTimestampDiff_ns = 0;
+
+		anEvent.rollovercounter = mdppRolloverCounter;
+		latestAbsoluteMdppTimestamp    = getAbsoluteMdppTimestamp(anEvent);
+		latestAbsoluteMdppTimestamp_ns = getAbsoluteMdppTimestamp_ns(anEvent);
+
+		return;
 	}
 
+	double A = MDPP_TIMESTAMP_MAX_NS - prevMdppTimestamp_ns;
+	double B = MDPP_TIMESTAMP_MAX_NS - mdppTimestamp_ns;
+
+	bool isReversed = false;
+	bool isRollover = false;
+
+#ifdef DEBUG
+				cerr << "                                       A: " << A << endl;
+				cerr << "                                       B: " << B << endl;
+				cerr << "                    timestamp diff in ns: " << timestampDiff_ns << endl;
+				cerr << "               MDPP timestamp diff in ns: " << mdppTimestampDiff_ns << endl;
+#endif
+
+	if (timestampDiff_ns < REVERSED_TEST_THRESHOLD) {
+#ifdef DEBUG
+				cerr << "== Possible reversed order event! ==" << endl;
+#endif
+		if (mdppTimestampDiff_ns < 0 && -mdppTimestampDiff_ns < 1.5*REVERSED_TEST_THRESHOLD) {
+			isReversed = true;
+
+#ifdef DEBUG
+				cerr << "== Reversed order event! ==" << endl;
+#endif
+		} else if (A >= timestampDiff_ns && B <= timestampDiff_ns && mdppTimestampDiff_ns > 10*REVERSED_TEST_THRESHOLD) {
+			isReversed = true;
+
+#ifdef DEBUG
+				cerr << "== Reversed order event! ==" << endl;
+#endif
+		} 
+	} else if (A <= timestampDiff_ns) {
+#ifdef DEBUG
+				cerr << "== Possible roll over ==" << endl;
+#endif
+		for (int iRollover = 1; iRollover < ROLLOVER_LIMIT; iRollover++) {
+			if (mdppTimestampDiff_ns + iRollover*MDPP_TIMESTAMP_MAX_NS < 1.1*timestampDiff_ns) {
+				isRollover = true;
+				mdppRolloverCounter += iRollover;
+
+#ifdef DEBUG
+				cerr << "== Rolled over ==" << endl;
+#endif
+
+				return;
+			}
+		}
+	}
+
+	/*
 	if (mdppTimestampDiff_ns < 0) {
-		uint64_t rolloverCounter = timestampDiff_ns/MDPP_TIMESTAMP_MAX_NS;
-		mdppTimestampDiff_ns = -mdppTimestampDiff_ns;
+		bool isReversed = MDPP_TIMESTAMP_MAX_NS - prevMdppTimestamp_ns < timestampDiff_ns;
+
+		if (isReversed) {
+			// Reversed order case
+
+#ifdef DEBUG
+				cerr << "== Reversed order event! ==" << endl;
+#endif
+
+		} else {
+			uint64_t rolloverCounter = timestampDiff_ns/MDPP_TIMESTAMP_MAX_NS;
+			bool isRollover = timestampDiff_ns/MDPP_TIMESTAMP_MAX_NS > 0
+			// Roll over case
+			mdppRolloverCounter += rolloverCounter + 1;
+
+#ifdef DEBUG
+				cerr << "== Rolled over ==" << endl;
+#endif
+		}
 
 #ifdef DEBUG
 				cerr << "== Updating time ==" << endl;
 				cerr << "                    timestamp diff in ns: " << timestampDiff_ns << endl;
 				cerr << "               MDPP timestamp diff in ns: " << mdppTimestampDiff_ns << endl;
 #endif
-
-		if (!(mdppTimestampDiff_ns > 0.8*timestampDiff_ns && mdppTimestampDiff_ns < 1.2*timestampDiff_ns)) {
-			mdppRolloverCounter += rolloverCounter + 1;
-		}
 	}
+	*/
 
 	anEvent.rollovercounter = mdppRolloverCounter;
 	latestAbsoluteMdppTimestamp    = std::max(getAbsoluteMdppTimestamp(anEvent), latestAbsoluteMdppTimestamp);
 	latestAbsoluteMdppTimestamp_ns = std::max(getAbsoluteMdppTimestamp_ns(anEvent), latestAbsoluteMdppTimestamp_ns);
+
+#ifdef DEBUG
+				cerr << "         latest absolute MDPP timestamps: " << latestAbsoluteMdppTimestamp << endl;
+				cerr << "   latest absolute MDPP timestamps in ns: " << latestAbsoluteMdppTimestamp_ns << endl;
+#endif
 }
 
 MDPPSCPSRO &MDPPSCPSROSoftTrigger::getLastEvent()
