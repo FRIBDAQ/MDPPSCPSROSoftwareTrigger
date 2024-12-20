@@ -26,6 +26,7 @@ set testPulser          0
 set pulserAmplitude     400
 set triggerSource       0x400
 set triggerOutput       0x400
+set tdcresolution       781ps
 
 ### REQUIRED FOR SCP SRO Software Trigger #####
 set MDPPSCPSROSoftTrigger 1
@@ -39,6 +40,7 @@ mdpp32scp create scp -base 0x22220000 -id 0 -ipl 1 -vector 0 -irqsource event -i
 # outputformat 4 REQUIRED FOR SCP SRO Software Trigger #####
 mdpp32scp config scp -tfintdiff $tfintdiff \
                      -outputformat 4 \
+                     -tdcresolution $tdcresolution \
                      -pz $pz \
                      -gain $gain \
                      -threshold $threshold \
