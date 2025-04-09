@@ -1,4 +1,5 @@
 lappend auto_path [file join $::env(DAQROOT) TclLibs]
+set here [file dirname [file normalize [info script]]]
 
 package provide MDPPSCPSROSoftTrigger 1.0
 
@@ -65,8 +66,7 @@ namespace eval MDPPSCPSROSoftTrigger {
 
 		# on the first time running, kill of old processes, and launch a new one.
 		if {$pipe eq {}} {
-#			set cmdpath "/user/n4vault/mdpp32_streaming_readout"
-			set cmdpath "/genie/mdpp32_streaming_readout/package"
+			set cmdpath $here
 			set inring  n4vault
 			set outring n4vault_softtrig
 
