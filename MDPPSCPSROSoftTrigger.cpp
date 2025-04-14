@@ -35,18 +35,15 @@
 
 #include "MDPPSCPSRO.h"
 
-uint64_t   EXTERNAL_TIMESTAMP_MAX = 0xFFFFFFFF; // 32bits
-double   EXTERNAL_CLOCK_PERIOD_NS = 100.0; // ns (10MHz)
-//double   EXTERNAL_CLOCK_PERIOD_NS = 62.5; // ns (16MHz)
-double              MDPP_TDC_UNIT = 24.41; // ps
-//double            MDPP_TDC_UNIT = 781.25; // ps
-uint32_t             MDPP_TDC_MAX = 0x3FFFFFFF;
-double      MDPP_TIMESTAMP_MAX_NS = static_cast<double>(MDPP_TDC_MAX)*MDPP_TDC_UNIT/1000.;
-double    REVERSED_TEST_THRESHOLD = 10; // ns
+//double                 MDPP_TDC_UNIT = 24.41; // ps
+double                 MDPP_TDC_UNIT = 781.25; // ps
+uint64_t                MDPP_TDC_MAX = 0x3FFFFFFFFFFF;
+double         MDPP_TIMESTAMP_MAX_NS = static_cast<double>(MDPP_TDC_MAX)*MDPP_TDC_UNIT/1000.;
+double    REVERSED_TEST_THRESHOLD_NS = 10; // ns
 
 #define NUM_CHANNEL 32
 
-//#define DEBUG
+#define DEBUG
 
 using std::queue;
 using std::deque;
@@ -62,10 +59,6 @@ class MDPPSCPSROSoftTrigger {
 	public:
     bool timeSet = false;
 
-  double     timestamp_ns = 0;
-  double prevTimestamp_ns = 0;
-uint64_t externalTimestampRolloverCounter = 0;
-
   double     mdppTimestamp_ns = 0;
   double prevMdppTimestamp_ns = 0;
 uint64_t latestAbsoluteMdppTimestamp    = 0;
@@ -78,8 +71,8 @@ uint64_t  mdppRolloverCounter = 0;
      int  triggerChannel = -1;
   double  windowStart_ns = -1; // valid always positive
   double  windowWidth_ns = -1; // valid always positive
-uint64_t  windowStart    = 0; // derived from ns approx value in 24.41ps
-uint64_t  windowWidth    = 0; // derived from ns approx value in 24.41ps
+uint64_t  windowStart    = 0; // derived from ns approx value in MDPP_TDC_UNIT
+uint64_t  windowWidth    = 0; // derived from ns approx value in MDPP_TDC_UNIT
 
     bool dataCollecting = false;
     bool collectingDone = true;
@@ -92,7 +85,6 @@ deque<MDPPSCPSRO *> hitDeque;
 queue<MDPPSCPSRO *> eventQueue;
 
 	public:
-double getTimestamp_ns(MDPPSCPSRO &anEvent);
 uint64_t getMdppTimestamp(MDPPSCPSRO &anEvent);
 double getMdppTimestamp_ns(MDPPSCPSRO &anEvent);
 uint64_t getAbsoluteMdppTimestamp(MDPPSCPSRO &anEvent);
@@ -134,14 +126,9 @@ void usage(std::ostream &o, const char *msg, const char *program)
 	std::exit(EXIT_FAILURE);
 }
 
-double MDPPSCPSROSoftTrigger::getTimestamp_ns(MDPPSCPSRO &anEvent)
-{
-	return static_cast<double>(static_cast<uint64_t>(externalTimestampRolloverCounter)*EXTERNAL_TIMESTAMP_MAX + static_cast<uint64_t>(anEvent.externaltimestamp))*EXTERNAL_CLOCK_PERIOD_NS - refDiff_ns;
-}
-
 uint64_t MDPPSCPSROSoftTrigger::getMdppTimestamp(MDPPSCPSRO &anEvent)
 {
-	return static_cast<uint64_t>(anEvent.timestamp);
+	return anEvent.timestamp;
 }
 
 double MDPPSCPSROSoftTrigger::getMdppTimestamp_ns(MDPPSCPSRO &anEvent)
@@ -151,7 +138,7 @@ double MDPPSCPSROSoftTrigger::getMdppTimestamp_ns(MDPPSCPSRO &anEvent)
 
 uint64_t MDPPSCPSROSoftTrigger::getAbsoluteMdppTimestamp(MDPPSCPSRO &anEvent)
 {
-	uint64_t absoluteMdppTimestamp = (static_cast<uint64_t>(anEvent.rollovercounter) << 30) | getMdppTimestamp(anEvent);
+	uint64_t absoluteMdppTimestamp = (anEvent.rollovercounter << 46) | getMdppTimestamp(anEvent);
 	return absoluteMdppTimestamp;
 }
 
@@ -184,20 +171,8 @@ MDPPSCPSRO &MDPPSCPSROSoftTrigger::unpack(CRingItem &item) {
 		// This is wrong!
 	}
 
-	uint32_t *externalTimestamp = reinterpret_cast<uint32_t *>(vmusbHeader);
-	anEvent.externaltimestamp = *externalTimestamp;
-
-#ifdef DEBUG
-	cout << "externalTimestamp: " << *externalTimestamp << endl;
-#endif
-
-	externalTimestamp++;
-
-	// Skip the second scaler
-	externalTimestamp++;
-
-	uint32_t *firstItem = reinterpret_cast<uint32_t *>(externalTimestamp);
-	int header = (*firstItem&0xC0000000) >> 30;
+	uint32_t *a32BitItem = reinterpret_cast<uint32_t *>(vmusbHeader);
+	int header = (*a32BitItem&0xC0000000) >> 30;
 
 	if (header != 1) {
 		anEvent.moduleid = -1;
@@ -205,34 +180,60 @@ MDPPSCPSRO &MDPPSCPSROSoftTrigger::unpack(CRingItem &item) {
 		return anEvent;
 	}
 
-	anEvent.moduleid = (*firstItem   & 0x3F000000) >> 24;
-	anEvent.trigflag = (*firstItem   &   0x800000) >> 23;
-	anEvent.ch       = (*firstItem   &   0x7C0000) >> 18;
-	anEvent.pileup   = (*firstItem   &    0x20000) >> 17;
-	anEvent.overflow = (*firstItem   &    0x10000) >> 16;
-	anEvent.adc      =  *firstItem   &     0xffff;
+	anEvent.moduleid      = (*a32BitItem &    0xFF0000) >> 16;
+	anEvent.tdcresolution = (*a32BitItem &      0xE000) >> 13;
+
+	int num32Words        =  *a32BitItem &       0x3FF;
+
+	// Next 32 bit item - ADC data
+	a32BitItem++;
+
+	// Just for checking
+	bool dataChecker = (*a32BitItem &  0x10000000) >> 28;
+	if (!dataChecker) {
+		anEvent.moduleid = -1;
+
+		return anEvent;
+	}
+
+	anEvent.pileup   = (*a32BitItem   &  0x1000000) >> 18;
+	anEvent.overflow = (*a32BitItem   &   0x800000) >> 17;
+	anEvent.ch       = (*a32BitItem   &   0x7F0000) >> 16;
+	anEvent.adc      =  *a32BitItem   &     0xffff;
 
 #ifdef DEBUG
 	cout << "moduleid: " << anEvent.moduleid << endl;
-	cout << "trigger flag: " << anEvent.trigflag << endl;
 	cout << "channel: " << anEvent.ch << endl;
 	cout << "pileup flag: " << anEvent.pileup << endl;
 	cout << "overflow flag: " << anEvent.overflow << endl;
 	cout << "adc: " << anEvent.adc<< endl;
 #endif
 
-	firstItem++;
+	// Next 32 bit item - Extended timestamp
+	a32BitItem++;
 
-	uint32_t *secondItem = firstItem;
-	header = (*secondItem&0xC0000000) >> 30;
-
-	if (header != 3) {
+	// Just for checking
+	dataChecker = (*a32BitItem &  0x20000000) >> 29;
+	if (!dataChecker) {
 		anEvent.moduleid = -1;
 
 		return anEvent;
 	}
 
-	anEvent.timestamp = *secondItem&0x3FFFFFFF;
+	anEvent.timestamp = (static_cast<uint64_t>(*a32BitItem & 0xFFFF) << 30);
+
+	// Next 32 bit item - timestamp
+	a32BitItem++;
+
+	// Just for checking
+	dataChecker = (((*a32BitItem &  0xC0000000) >> 30) == 3);
+	if (!dataChecker) {
+		anEvent.moduleid = -1;
+
+		return anEvent;
+	}
+
+	anEvent.timestamp |= (*a32BitItem & 0x3FFFFFFF);
 
 #ifdef DEBUG
 	cout << "timestamp: " << anEvent.timestamp << endl;
@@ -249,38 +250,40 @@ CPhysicsEventItem *MDPPSCPSROSoftTrigger::pack(MDPPSCPSRO &anEvent)
 
 	void *dest = newItem -> getBodyCursor();
 
-	uint16_t bodySize = 0xc + 4; // Original + zero pad + extended timestamp
+	uint16_t num32BitItems = 4;
+	uint16_t bodySize = 0x1 + num32BitItems*2 + 0x4;
 	uint16_t vmusbHeader = ((anEvent.stackid&0x7) << 13) | (bodySize&0xFFF);
 
 	std::memcpy(dest, &vmusbHeader, 2);
 	dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 2);
 
-	std::memcpy(dest, &anEvent.externaltimestamp, 4);
+	uint64_t headerItem = (0x1                              << 30)
+											| ((anEvent.moduleid      &   0xFF) << 16)
+											| ((anEvent.tdcresolution &    0x7) << 13)
+											|  (num32BitItems - 1     &  0x3FF);
+
+	std::memcpy(dest, &headerItem, 4);
 	dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
-	uint32_t zeroPad = 0;
+	uint64_t adcItem = (0x1                        << 28)
+									|  (anEvent.pileup             << 24)
+									|  (anEvent.overflow           << 23)
+									| ((anEvent.ch       &   0x7F) << 16)
+									|  (anEvent.adc      & 0xFFFF);
 
-	std::memcpy(dest, &zeroPad, 4);
+	std::memcpy(dest, &adcItem, 4);
 	dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
-	uint64_t firstItem = (0x1 << 30) | ((anEvent.moduleid&0x3F) << 24) | ((anEvent.trigflag&0x1) << 23) 
-		                 | ((anEvent.ch&0x1F) << 18) | (anEvent.pileup << 17) | (anEvent.overflow << 16)
-										 | (anEvent.adc&0xFFFF);
+	uint64_t timestampHighItem = (0x2                                         << 28)
+		 												| ((anEvent.timestamp & 0x3FFFC0000000) >> 30);
 
-	std::memcpy(dest, &firstItem, 4);
+	std::memcpy(dest, &timestampHighItem, 4);
 	dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
-	std::memcpy(dest, &zeroPad, 4);
-	dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
+	uint64_t timestampLowItem = (0x3                             << 30)
+		 												| (anEvent.timestamp & 0x3FFFFFFF);
 
-	uint64_t rolloverItem = (0x2 << 30) | (anEvent.rollovercounter&0x3FFFFFFF);
-
-	std::memcpy(dest, &rolloverItem, 4);
-	dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
-
-	uint64_t secondItem = (0x3 << 30) | (anEvent.timestamp&0x3FFFFFFF);
-
-	std::memcpy(dest, &secondItem, 4);
+	std::memcpy(dest, &timestampLowItem, 4);
 	dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
 	uint64_t ender = 0xFFFFFFFF;
@@ -306,21 +309,10 @@ void MDPPSCPSROSoftTrigger::send(CDataSink &sink, CRingItem &item)
 
 void MDPPSCPSROSoftTrigger::updateTimestamps(MDPPSCPSRO &anEvent)
 {
-	prevTimestamp_ns = timestamp_ns;
-			timestamp_ns = getTimestamp_ns(anEvent);
-	double timestampDiff_ns = timestamp_ns - prevTimestamp_ns;
-
-	if (timestampDiff_ns < 0) {
-		externalTimestampRolloverCounter += 1;
-		timestamp_ns  = getTimestamp_ns(anEvent);
-		timestampDiff_ns = timestamp_ns - prevTimestamp_ns;
-	}
-
 	prevMdppTimestamp_ns = mdppTimestamp_ns;
 			mdppTimestamp_ns = getMdppTimestamp_ns(anEvent);
 	double mdppTimestampDiff_ns = mdppTimestamp_ns - prevMdppTimestamp_ns;
 	if (!timeSet) {
-		timestampDiff_ns = 0;
 		mdppTimestampDiff_ns = 0;
 
 		anEvent.rollovercounter = mdppRolloverCounter;
@@ -337,7 +329,7 @@ void MDPPSCPSROSoftTrigger::updateTimestamps(MDPPSCPSRO &anEvent)
 #endif
 
 	if (mdppTimestampDiff_ns < 0) {
-		if (-mdppTimestampDiff_ns > REVERSED_TEST_THRESHOLD) {
+		if (prevMdppTimestamp_ns > MDPP_TIMESTAMP_MAX_NS/2 && mdppTimestamp_ns < MDPP_TIMESTAMP_MAX_NS/2) {
 			mdppRolloverCounter += 1;
 
 #ifdef DEBUG
@@ -400,7 +392,7 @@ void MDPPSCPSROSoftTrigger::sendCollection(CDataSink &sink)
 
 	void *dest = newItem.getBodyCursor();
 
-	uint16_t bodySize = 0xc*eventQueue.size() + 4; // an event(0xc)*#events + ender
+	uint16_t bodySize = 0x1 + 8*eventQueue.size() + 4; // an event(0xc)*#events + ender
 	uint16_t vmusbHeader = ((anEvent.stackid&0x7) << 13) | (bodySize&0xFFF);
 
 	std::memcpy(dest, &vmusbHeader, 2);
@@ -410,34 +402,34 @@ void MDPPSCPSROSoftTrigger::sendCollection(CDataSink &sink)
     std::unique_ptr<MDPPSCPSRO> pAnEvent(eventQueue.front());
 		MDPPSCPSRO &anEvent = *pAnEvent;
 
-		std::memcpy(dest, &anEvent.externaltimestamp, 4);
+		uint64_t headerItem = (0x1                              << 30)
+												| ((anEvent.moduleid      &   0xFF) << 16)
+											 	| ((anEvent.tdcresolution &    0x7) << 13)
+											 	|  (0x3                   &  0x3FF);
+
+		std::memcpy(dest, &headerItem, 4);
 		dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
-		uint32_t zeroPad = 0;
+		uint64_t adcItem = (0x1                        << 28)
+										|  (anEvent.pileup             << 24)
+									 	|  (anEvent.overflow           << 23)
+									 	| ((anEvent.ch       &   0x7F) << 16)
+									 	|  (anEvent.adc      & 0xFFFF);
 
-		std::memcpy(dest, &zeroPad, 4);
+		std::memcpy(dest, &adcItem, 4);
 		dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
-		uint64_t firstItem = (0x1 << 30) | ((anEvent.moduleid&0x3F) << 24) | ((anEvent.trigflag&0x1) << 23) 
-			| ((anEvent.ch&0x1F) << 18) | (anEvent.pileup << 17) | (anEvent.overflow << 16)
-			| (anEvent.adc&0xFFFF);
+		uint64_t timestampHighItem = (0x2                                              << 28)
+															|  (anEvent.rollovercounter                          << 16)
+															| ((anEvent.timestamp       & 0x3FFFC0000000) >> 30);
 
-		std::memcpy(dest, &firstItem, 4);
+		std::memcpy(dest, &timestampHighItem, 4);
 		dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
-		uint64_t timestampFromStart = (getAbsoluteMdppTimestamp(anEvent) - windowStartTimestamp)&0xFFFFFFFF;
+		uint64_t timestampLowItem = (0x3                             << 30)
+															| (anEvent.timestamp & 0x3FFFFFFF);
 
-		std::memcpy(dest, &timestampFromStart, 4);
-		dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
-
-		uint64_t rolloverItem = (0x2 << 30) | (mdppRolloverCounter&0x3FFFFFFF);
-
-		std::memcpy(dest, &rolloverItem, 4);
-		dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
-
-		uint64_t secondItem = (0x3 << 30) | (anEvent.timestamp&0x3FFFFFFF);
-
-		std::memcpy(dest, &secondItem, 4);
+		std::memcpy(dest, &timestampLowItem, 4);
 		dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
 		eventQueue.pop();
