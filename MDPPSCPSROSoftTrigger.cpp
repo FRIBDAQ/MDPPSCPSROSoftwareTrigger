@@ -43,7 +43,7 @@ double    REVERSED_TEST_THRESHOLD_NS = 10; // ns
 
 #define NUM_CHANNEL 32
 
-#define DEBUG
+//#define DEBUG
 
 using std::queue;
 using std::deque;
@@ -251,7 +251,7 @@ CPhysicsEventItem *MDPPSCPSROSoftTrigger::pack(MDPPSCPSRO &anEvent)
 	void *dest = newItem -> getBodyCursor();
 
 	uint16_t num32BitItems = 4;
-	uint16_t bodySize = 0x1 + num32BitItems*2 + 0x4;
+	uint16_t bodySize = num32BitItems*2 + 0x4;
 	uint16_t vmusbHeader = ((anEvent.stackid&0x7) << 13) | (bodySize&0xFFF);
 
 	std::memcpy(dest, &vmusbHeader, 2);
@@ -392,7 +392,7 @@ void MDPPSCPSROSoftTrigger::sendCollection(CDataSink &sink)
 
 	void *dest = newItem.getBodyCursor();
 
-	uint16_t bodySize = 0x1 + 8*eventQueue.size() + 4; // an event(0xc)*#events + ender
+	uint16_t bodySize = 8*eventQueue.size() + 4; // an event(0xc)*#events + ender
 	uint16_t vmusbHeader = ((anEvent.stackid&0x7) << 13) | (bodySize&0xFFF);
 
 	std::memcpy(dest, &vmusbHeader, 2);
