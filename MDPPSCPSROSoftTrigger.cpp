@@ -275,7 +275,8 @@ CPhysicsEventItem *MDPPSCPSROSoftTrigger::pack(MDPPSCPSRO &anEvent)
 	dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
 
 	uint64_t timestampHighItem = (0x2                                         << 28)
-		 												| ((anEvent.timestamp & 0x3FFFC0000000) >> 30);
+		                        | ((anEvent.rollovercounter &          0xFFF)   << 16)
+		 												| ((anEvent.timestamp       & 0x3FFFC0000000) >> 30);
 
 	std::memcpy(dest, &timestampHighItem, 4);
 	dest = static_cast<void *>(static_cast<uint8_t *>(dest) + 4);
