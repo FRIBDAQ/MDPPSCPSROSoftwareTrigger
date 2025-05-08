@@ -14,29 +14,22 @@ namespace eval MDPPSCPSROSoftTrigger {
   variable parser [::Actions %AUTO%]
   set ::DefaultActions::name "MDPP-16/32 SCP SRO Software Trigger"
 
-	variable trigCh
-	variable windowStart
-	variable windowWidth
-  
-  proc register {tc ws ww} {
-		variable trigCh
-		variable windowStart
-		variable windowWidth
+  proc register {} {
 
     set stateMachine [RunstateMachineSingleton %AUTO%]
     $stateMachine addCalloutBundle MDPPSCPSROSoftTrigger
     $stateMachine destroy
-
-		set trigCh $tc
-		set windowStart $ws
-		set windowWidth $ww
   }
 
   proc enter {from to} {
   }
 
   proc leave {from to} {
+		variable pipe
+
     if {($from eq "Halted") && ($to eq "Active")} {
+			killOldProvider
+			set pipe {}
       startSimulator
     }
 
@@ -60,15 +53,11 @@ namespace eval MDPPSCPSROSoftTrigger {
   proc startSimulator {} {
 		variable pipe
 		variable parser
-		variable trigCh
-		variable windowStart
-		variable windowWidth
 
 		# on the first time running, kill of old processes, and launch a new one.
 		if {$pipe eq {}} {
 			set cmdpath $here
-			set inring  n4vault
-			set outring n4vault_softtrig
+			source MDPPSCPSROSoftTriggerSettings.tcl
 
 			killOldProvider $outring
 
