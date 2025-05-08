@@ -11,6 +11,7 @@ package require ring
 
 namespace eval MDPPSCPSROSoftTrigger {
   variable pipe {}
+  variable oldring {}
   variable parser [::Actions %AUTO%]
   set ::DefaultActions::name "MDPP-16/32 SCP SRO Software Trigger"
 
@@ -28,8 +29,14 @@ namespace eval MDPPSCPSROSoftTrigger {
 		variable pipe
 
     if {($from eq "Halted") && ($to eq "Active")} {
-			killOldProvider
-			set pipe {}
+	    if {$pipe ne {}} {
+		    chan event $pipe readable [list]
+		    set pipe {}
+		    if ($oldring ne {}} {
+			    killOldProvider $oldring
+		    }
+	    }
+
       startSimulator
     }
 
@@ -53,10 +60,11 @@ namespace eval MDPPSCPSROSoftTrigger {
   proc startSimulator {} {
 		variable pipe
 		variable parser
+		variable oldring
 
 		# on the first time running, kill of old processes, and launch a new one.
 		if {$pipe eq {}} {
-			set cmdpath $here
+			set cmdpath $::here
 			source MDPPSCPSROSoftTriggerSettings.tcl
 
 			killOldProvider $outring
@@ -67,6 +75,8 @@ namespace eval MDPPSCPSROSoftTrigger {
 			chan configure $pipe -blocking 0
 			chan configure $pipe -buffering line
 			chan event $pipe readable [list $parser onReadable $pipe]
+
+			set oldring $outring
 		}
 	}
 
