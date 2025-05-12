@@ -28,16 +28,20 @@ class ConversionThread(QThread):
     finished = pyqtSignal()
 
     def __init__(self, infile, outfile, trigCh, windowStart, windowWidth):
-        self.infileUri = QUrl.fromLocalFile(infile)
-        self.outfileUri = QUrl.fromLocalFile(outfile)
+        super().__init__()
+
+        self.infileUri = QUrl.fromLocalFile(infile).toString()
+        self.outfileUri = QUrl.fromLocalFile(outfile).toString()
         self.trigCh = trigCh
         self.windowStart = windowStart
         self.windowWidth = windowWidth
 
 
     def run(self):
-        subprocess.run([os.path.join(os.path.dirname(__file__), MDPPSCPSROSoftTrigger), self.infileUri, self.outfileUri, self.trigCh, self.windowStart, self.windowWidth])
+        program = os.path.join(os.path.dirname(__file__), "MDPPSCPSROSoftTrigger")
+        subprocess.run([program, self.infileUri, self.outfileUri, str(self.trigCh), str(self.windowStart), str(self.windowWidth)])
         self.finished.emit()
+
 
 class About(QtWidgets.QDialog):
     def __init__(self, parent=None):
@@ -51,7 +55,7 @@ class Window(QtWidgets.QMainWindow):
 
         self.setWindowFlags(QtCore.Qt.WindowMinimizeButtonHint | QtCore.Qt.WindowCloseButtonHint)
 
-        uic.loadUi(os.path.join(os.path.dirname(__file__), 'MDPPSCPSROOfflineSoftTriggerControl.ui'), self)
+        uic.loadUi(os.path.join(os.path.dirname(__file__), 'MDPPSCPSROOfflineSoftTrigger.ui'), self)
 
         self.LB_log = self.findChild(QtWidgets.QLabel, 'LB_log')
 
@@ -65,10 +69,10 @@ class Window(QtWidgets.QMainWindow):
         self.LE_WS = self.findChild(QtWidgets.QLineEdit, "LE_WS")
         self.LE_WW = self.findChild(QtWidgets.QLineEdit, "LE_WW")
 
-        PB_browseInfile.pressed.connect(self.openFileSelectionDialog(PB_browseInfile))
-        PB_browseOutfile.pressed.connect(self.openFileSelectionDialog(PB_browseOutfile))
-        PB_start = self.findChild(QtWidgets.QPushButton, 'PB_start')
-        PB_start.pressed.connect(self.startConversion)
+        self.PB_browseInfile.pressed.connect(lambda: self.openFileSelectionDialog(self.PB_browseInfile))
+        self.PB_browseOutfile.pressed.connect(lambda: self.openFileSelectionDialog(self.PB_browseOutfile))
+        self.PB_start = self.findChild(QtWidgets.QPushButton, 'PB_start')
+        self.PB_start.pressed.connect(self.startConversion)
 
         PB_about = self.findChild(QtWidgets.QPushButton, "PB_about")
         PB_about.pressed.connect(self._openAboutDialog)
@@ -80,12 +84,12 @@ class Window(QtWidgets.QMainWindow):
         self._setLog(LOG_WARNING, 'Processing....')
         self.PB_browseInfile.setEnabled(False)
         self.PB_browseOutfile.setEnabled(False)
-        self.LE_trigCh.setEnabled(False)
+        self.CB_trigCh.setEnabled(False)
         self.LE_WS.setEnabled(False)
         self.LE_WW.setEnabled(False)
         self.PB_start.setEnabled(False);
 
-        self.worker = ConversionThread()
+        self.worker = ConversionThread(self.LB_infile.text(), self.LB_outfile.text(), self.CB_trigCh.currentIndex(), self.LE_WS.text(), self.LE_WW.text())
         self.worker.finished.connect(self.onFinishedConversion)
         self.worker.start()
 
@@ -94,7 +98,7 @@ class Window(QtWidgets.QMainWindow):
         self._setLog(LOG_GOOD, 'Conversion Finised!')
         self.PB_browseInfile.setEnabled(True)
         self.PB_browseOutfile.setEnabled(True)
-        self.LE_trigCh.setEnabled(True)
+        self.CB_trigCh.setEnabled(True)
         self.LE_WS.setEnabled(True)
         self.LE_WW.setEnabled(True)
         self.PB_start.setEnabled(True)
@@ -166,6 +170,6 @@ class Window(QtWidgets.QMainWindow):
         
 
 if __name__ == "__main__":
-    app = QtWidgets.QApplication()
+    app = QtWidgets.QApplication([])
     window = Window()
     app.exec_()
