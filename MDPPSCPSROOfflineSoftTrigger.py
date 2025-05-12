@@ -108,9 +108,11 @@ class Window(QtWidgets.QMainWindow):
         options = QtWidgets.QFileDialog.Options()
 
         if sender == self.PB_browseInfile:
-            selectedFile, _ = QtWidgets.QFileDialog.getOpenFileName(self, "File to convert", '', "evt files (*.evt)", '', options)
+            selectedFile, _ = QtWidgets.QFileDialog.getOpenFileName(self, "File to convert", '/user/n4vault/mdpp32_sro_2025/stagearea', "evt files (*.evt)", '', options)
         else:
-            selectedFile, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Converted file saving to", '', "evt files (*.evt)", '', options)
+            selectedFile, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Converted file saving to", '/user/n4vault/mdpp32_sro_2025/stagearea/conversion', "evt files (*.evt)", '', options)
+            if not selectedFile.endswith(".evt"):
+                selectedFile += ".evt"
 
 
         if selectedFile == '':
@@ -119,9 +121,41 @@ class Window(QtWidgets.QMainWindow):
             return
         else:
             if sender == self.PB_browseInfile:
-                self.LB_infile.setText(selectedFile)
+                self._setFilePath(self.LB_infile, selectedFile)
             else:
-                self.LB_outfile.setText(selectedFile)
+                self._setFilePath(self.LB_outfile, selectedFile)
+
+
+    def _setFilePath(self, label, path):
+        label.setText(path)
+        font = label.font()
+        font.setPointSizeF(20)
+        label.setFont(font)
+
+        rect = label.contentsRect()
+        font = label.font()
+        size = font.pointSize()
+        metric = QtGui.QFontMetrics(font)
+        rect2 = metric.boundingRect(rect, QtCore.Qt.TextWordWrap, path)
+        step = -0.01 if rect2.height() > rect.height() else 0.01
+        while True:
+            font.setPointSizeF(size + step)
+            metric = QtGui.QFontMetrics(font)
+            rect2 = metric.boundingRect(rect, QtCore.Qt.TextWordWrap, path)
+            if size <= 0.1:
+                break
+            if step < 0:
+                size += step
+                if rect2.height() < rect.height():
+                    break
+            else:
+                if rect2.height() > rect.height():
+                    break
+                size += step
+
+        font.setPointSizeF(size)
+        label.setFont(font)
+
 
     def _setLog(self, level, text):
         self.LB_log.setStyleSheet('color: %s;' % level)
