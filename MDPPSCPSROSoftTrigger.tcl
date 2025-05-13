@@ -27,12 +27,13 @@ namespace eval MDPPSCPSROSoftTrigger {
 
   proc leave {from to} {
 		variable pipe
+		variable oldring
 
     if {($from eq "Halted") && ($to eq "Active")} {
 	    if {$pipe ne {}} {
 		    chan event $pipe readable [list]
 		    set pipe {}
-		    if ($oldring ne {}} {
+		    if {$oldring ne {}} {
 			    killOldProvider $oldring
 		    }
 	    }
