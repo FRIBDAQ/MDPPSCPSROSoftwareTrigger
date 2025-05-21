@@ -47,6 +47,15 @@ class Window(QtWidgets.QMainWindow):
         self.LE_WS = self.findChild(QtWidgets.QLineEdit, "LE_WS")
         self.LE_WW = self.findChild(QtWidgets.QLineEdit, "LE_WW")
 
+        self.LE_inring.textChanged.connect(self._emptyLog)
+        self.LE_outring.textChanged.connect(self._emptyLog)
+        self.LE_WS.textChanged.connect(self._emptyLog)
+        self.LE_WW.textChanged.connect(self._emptyLog)
+
+        validator = QtGui.QIntValidator(0, 9999999)
+        self.LE_WS.setValidator(validator)
+        self.LE_WW.setValidator(validator)
+
         PB_apply = self.findChild(QtWidgets.QPushButton, 'PB_apply')
         PB_load = self.findChild(QtWidgets.QPushButton, 'PB_load')
         PB_save = self.findChild(QtWidgets.QPushButton, 'PB_save')
@@ -174,6 +183,10 @@ class Window(QtWidgets.QMainWindow):
         self.LB_log.setFont(font)
 
 
+    def _emptyLog(self):
+        self._setLog(LOG_WARNING, '')
+
+
     def _updateComboBoxes(self, value):
         self.CB_trigCh.currentTextChanged.disconnect()
         self.CB_trigCh.setItemText(self.sender().currentIndex(), value)
@@ -181,6 +194,7 @@ class Window(QtWidgets.QMainWindow):
 
 
     def _updateTrigChLabel(self, value):
+        self._emptyLog()
         self.LB_trigCh.setText(f"Trigger Channel {value}:")
 
 

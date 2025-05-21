@@ -25,7 +25,7 @@ LOG_WARNING = '#C28E00'
 LOG_ERROR = '#C30000'
 
 class ConversionThread(QThread):
-    finished = pyqtSignal()
+    finished = pyqtSignal(int)
 
     def __init__(self, infile, outfile, trigCh, windowStart, windowWidth):
         super().__init__()
@@ -39,8 +39,10 @@ class ConversionThread(QThread):
 
     def run(self):
         program = os.path.join(os.path.dirname(__file__), "MDPPSCPSROSoftTrigger")
-        subprocess.run([program, self.infileUri, self.outfileUri, str(self.trigCh), str(self.windowStart), str(self.windowWidth)])
-        self.finished.emit()
+        try:
+            subprocess.run([program, self.infileUri, self.outfileUri, str(self.trigCh), str(self.windowStart), str(self.windowWidth)], check=True)
+        except subprocess.CalledProcessError as e:
+            self.finished.emit(e.returncode)
 
 
 class About(QtWidgets.QDialog):
@@ -59,8 +61,8 @@ class Window(QtWidgets.QMainWindow):
 
         self.LB_log = self.findChild(QtWidgets.QLabel, 'LB_log')
 
-        self.LE_infile = self.findChild(QtWidgets.QLineEdit, "LE_infile")
-        self.LE_outfile = self.findChild(QtWidgets.QLineEdit, "LE_outfile")
+        self.LB_infile = self.findChild(QtWidgets.QLabel, "LB_infile")
+        self.LB_outfile = self.findChild(QtWidgets.QLabel, "LB_outfile")
         self.PB_browseInfile = self.findChild(QtWidgets.QPushButton, "PB_browseInfile")
         self.PB_browseOutfile = self.findChild(QtWidgets.QPushButton, "PB_browseOutfile")
         self.CB_trigCh = self.findChild(QtWidgets.QComboBox, "CB_trigCh")
@@ -68,6 +70,13 @@ class Window(QtWidgets.QMainWindow):
         self.CB_trigCh.currentIndexChanged.connect(self._updateTrigChLabel)
         self.LE_WS = self.findChild(QtWidgets.QLineEdit, "LE_WS")
         self.LE_WW = self.findChild(QtWidgets.QLineEdit, "LE_WW")
+
+        self.LE_WS.textChanged.connect(self._emptyLog)
+        self.LE_WW.textChanged.connect(self._emptyLog)
+
+        validator = QtGui.QIntValidator(0, 9999999)
+        self.LE_WS.setValidator(validator)
+        self.LE_WW.setValidator(validator)
 
         self.PB_browseInfile.clicked.connect(lambda: self.openFileSelectionDialog(self.PB_browseInfile))
         self.PB_browseOutfile.clicked.connect(lambda: self.openFileSelectionDialog(self.PB_browseOutfile))
@@ -81,6 +90,13 @@ class Window(QtWidgets.QMainWindow):
 
 
     def startConversion(self):
+        if self.LB_infile.text() == '':
+            self._setLog(LOG_ERROR, 'Input file is not selected!')
+            return
+        elif self.LB_outfile.text() == '':
+            self._setLog(LOG_ERROR, 'Output file is not specified!')
+            return
+
         self._setLog(LOG_WARNING, 'Processing....')
         self.PB_browseInfile.setEnabled(False)
         self.PB_browseOutfile.setEnabled(False)
@@ -94,8 +110,7 @@ class Window(QtWidgets.QMainWindow):
         self.worker.start()
 
 
-    def onFinishedConversion(self):
-        self._setLog(LOG_GOOD, 'Conversion Finised!')
+    def onFinishedConversion(self, code):
         self.PB_browseInfile.setEnabled(True)
         self.PB_browseOutfile.setEnabled(True)
         self.CB_trigCh.setEnabled(True)
@@ -103,15 +118,21 @@ class Window(QtWidgets.QMainWindow):
         self.LE_WW.setEnabled(True)
         self.PB_start.setEnabled(True)
 
+        if code == 0:
+            self._setLog(LOG_GOOD, 'Conversion Finished!')
+        else:
+            self._setLog(LOG_ERROR, 'Error! See the terminal window for more information!')
+
 
     def openFileSelectionDialog(self, sender):
+        self._emptyLog()
         options = QtWidgets.QFileDialog.Options()
 
         if sender == self.PB_browseInfile:
             selectedFile, _ = QtWidgets.QFileDialog.getOpenFileName(self, "File to convert", '/user/n4vault/mdpp32_sro_2025/stagearea', "evt files (*.evt)", '', options)
         else:
             selectedFile, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Converted file saving to", '/user/n4vault/mdpp32_sro_2025/stagearea/conversion', "evt files (*.evt)", '', options)
-            if not selectedFile.endswith(".evt"):
+            if selectedFile != '' and not selectedFile.endswith(".evt"):
                 selectedFile += ".evt"
 
 
@@ -188,6 +209,9 @@ class Window(QtWidgets.QMainWindow):
         font.setPointSizeF(size)
         self.LB_log.setFont(font)
 
+    def _emptyLog(self):
+        self._setLog(LOG_WARNING, '')
+
 
     def _updateComboBoxes(self, value):
         self.CB_trigCh.currentTextChanged.disconnect()
@@ -196,6 +220,7 @@ class Window(QtWidgets.QMainWindow):
 
 
     def _updateTrigChLabel(self, value):
+        self._emptyLog()
         self.LB_trigCh.setText(f"Trigger Channel {value}:")
 
 
