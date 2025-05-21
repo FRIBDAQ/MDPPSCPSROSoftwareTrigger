@@ -44,6 +44,8 @@ class ConversionThread(QThread):
         except subprocess.CalledProcessError as e:
             self.finished.emit(e.returncode)
 
+        self.finished.emit(0)
+
 
 class About(QtWidgets.QDialog):
     def __init__(self, parent=None):
