@@ -69,13 +69,13 @@ class Window(QtWidgets.QMainWindow):
         self.LE_WS = self.findChild(QtWidgets.QLineEdit, "LE_WS")
         self.LE_WW = self.findChild(QtWidgets.QLineEdit, "LE_WW")
 
-        self.PB_browseInfile.pressed.connect(lambda: self.openFileSelectionDialog(self.PB_browseInfile))
-        self.PB_browseOutfile.pressed.connect(lambda: self.openFileSelectionDialog(self.PB_browseOutfile))
+        self.PB_browseInfile.clicked.connect(lambda: self.openFileSelectionDialog(self.PB_browseInfile))
+        self.PB_browseOutfile.clicked.connect(lambda: self.openFileSelectionDialog(self.PB_browseOutfile))
         self.PB_start = self.findChild(QtWidgets.QPushButton, 'PB_start')
-        self.PB_start.pressed.connect(self.startConversion)
+        self.PB_start.clicked.connect(self.startConversion)
 
         PB_about = self.findChild(QtWidgets.QPushButton, "PB_about")
-        PB_about.pressed.connect(self._openAboutDialog)
+        PB_about.clicked.connect(self._openAboutDialog)
 
         self.show()
 
