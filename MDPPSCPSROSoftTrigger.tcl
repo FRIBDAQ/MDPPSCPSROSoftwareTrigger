@@ -52,7 +52,7 @@ namespace eval MDPPSCPSROSoftTrigger {
 			set producerPid [lindex $usage 3]
 
 			if {$producerPid != -1} {
-				ReadoutGUIPanel::Log MDPPSCPSROSoftTrigger warning "Killing off old producing process with PID=$producerPid"			
+				ReadoutGUIPanel::Log MDPPSCPSROSoftTrigger log "Killing off old producing process with PID=$producerPid"			
 				exec kill $producerPid
 			}
 		}
