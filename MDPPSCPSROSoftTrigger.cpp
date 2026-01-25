@@ -74,6 +74,10 @@ uint64_t  mdppRolloverCounter = 0;
 uint64_t  windowStart    = 0; // derived from ns approx value in MDPP_TDC_UNIT
 uint64_t  windowWidth    = 0; // derived from ns approx value in MDPP_TDC_UNIT
 
+    bool cut3s = 0; // Ignoring the initial 3sec data
+
+     int rfChannel = -1;
+
     bool dataCollecting = false;
     bool collectingDone = true;
   double  windowStartTimestamp_ns = 0;
@@ -115,13 +119,25 @@ void usage(std::ostream &o, const char *msg, const char *program)
 {
 	o << msg << std::endl;
 	o << "= Usage:\n";
-	o << "  " << program << " inRingURI outRingURI trigCh winStart winWidth\n";
+	o << "  " << program << " inRingURI outRingURI trigCh winStart winWidth [cut3s] [rfCh]\n";
 	o << "        inRingURI - the file: or tcp: URI that describes where data comes from\n";
 	o << "       outRingURI - the file: or tcp: URI that describes where data goes out to\n";
 	o << "           trigCh - a channel number to create trigger window\n";
 	o << "         winStart - trigger window start time in ns (WS)\n";
 	o << "         winWidth - trigger window width in ns (WW)\n\n";
+	o << "\n";
+	o << "     About trigger\n";
 	o << "       Trigger window is created as (t_ch - WS, t_ch - WS + WW).\n";
+	o << "\n";
+	o << "     About cut3s\n";
+	o << "       If this field is set 1, the program cuts the first 3s data.\n";
+	o << "       This feature is implemented to remove no-data gap happening for the first 2s of run.\n";
+	o << "       By default, this feature is off by setting the value 0\n";
+	o << "\n";
+	o << "     About rfCh\n";
+	o << "       If an RF channel is specified, the program won't pass the events until the first RF\n";
+	o << "       channel signal is detected. Once the channel data is detected, it keeps the data in\n";
+	o << "       the buffer until the next RF channel data is detected. If not, the buffer is flushed.\n";
 
 	std::exit(EXIT_FAILURE);
 }
@@ -659,10 +675,33 @@ int main(int argc, char **argv)
 	core -> windowStart    = core -> windowStart_ns*1000/MDPP_TDC_UNIT;
 	core -> windowWidth    = core -> windowWidth_ns*1000/MDPP_TDC_UNIT;
 
+	if (argc >= 6) {
+		core -> cut3s = atoi(argv[6]);
+		if (argc == 7) {
+			core -> rfChannel = atoi(argv[7]);
+		} else {
+			core -> rfChannel = -1;
+		}
+	} else {
+		core -> cut3s = 0;
+		core -> rfChannel = -1;
+	}
+
 	std::cout << std::endl;
 	std::cout << "==  Software trigger channel: " << core -> triggerChannel << std::endl;
 	std::cout << "== Trigger window start (ns): " << core -> windowStart_ns << std::endl;
 	std::cout << "== Trigger window width (ns): " << core -> windowWidth_ns << std::endl;
+
+	bool isIgnore3s = 0;
+	if (core -> cut3s == 1) {
+		std::cout << "== Ignoring the intial 3sec data!" << std :: endl;
+		isIgnore3s = 1;
+	}
+
+	if (core -> rfChannel != -1) {
+		std::cout << "== RF channel " << core -> rfChannel << " is specified." << std :: endl;
+		std::cout << "   Only data within the complete RF cycles will be sent." << std :: endl;
+	}
 	std::cout << std::endl;
 
 	// The loop below consumes items from the ring buffer until
@@ -678,6 +717,12 @@ int main(int argc, char **argv)
 
 		if (item.type() == PHYSICS_EVENT) {
 			MDPPSCPSRO &anEvent = core -> unpack(item);
+
+			if (isIgnore3s) {
+				isIgnore3s = core -> getMdppTimestamp_ns(anEvent) < 3.0E9;
+
+				continue;
+			}
 
 			core -> hitDeque.push_back(&anEvent);
 			core -> updateTimestamps(anEvent);
