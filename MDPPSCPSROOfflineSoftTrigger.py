@@ -27,7 +27,7 @@ LOG_ERROR = '#C30000'
 class ConversionThread(QThread):
     finished = pyqtSignal(int)
 
-    def __init__(self, infile, outfile, trigCh, windowStart, windowWidth):
+    def __init__(self, infile, outfile, trigCh, windowStart, windowWidth, cut3s, rfOn, rfCh):
         super().__init__()
 
         self.infileUri = QUrl.fromLocalFile(infile).toString()
@@ -35,12 +35,15 @@ class ConversionThread(QThread):
         self.trigCh = trigCh
         self.windowStart = windowStart
         self.windowWidth = windowWidth
+        self.cut3s = cut3s
+        self.rfOn = rfOn
+        self.rfCh = rfCh
 
 
     def run(self):
         program = os.path.join(os.path.dirname(__file__), "MDPPSCPSROSoftTrigger")
         try:
-            subprocess.run([program, self.infileUri, self.outfileUri, str(self.trigCh), str(self.windowStart), str(self.windowWidth)], check=True)
+            subprocess.run([program, self.infileUri, self.outfileUri, str(self.trigCh), str(self.windowStart), str(self.windowWidth), str(int(self.cut3s)), str(self.rfCh) if self.rfOn == 1 else str(-1)], check=True)
         except subprocess.CalledProcessError as e:
             self.finished.emit(e.returncode)
 
@@ -70,9 +73,16 @@ class Window(QtWidgets.QMainWindow):
         self.CB_trigCh = self.findChild(QtWidgets.QComboBox, "CB_trigCh")
         self.CB_trigCh.currentTextChanged.connect(self._updateComboBoxes)
         self.CB_trigCh.currentIndexChanged.connect(self._updateTrigChLabel)
+
+        self.CB_cut3s = self.findChild(QtWidgets.QCheckBox, "CB_cut3s")
+        self.CB_rfOn = self.findChild(QtWidgets.QCheckBox, "CB_rfOn")
+        self.CB_rfCh = self.findChild(QtWidgets.QComboBox, "CB_rfCh")
+
+        self.CB_rfOn.stateChanged.connect(lambda state: self.CB_rfCh.setEnabled(bool(state)))
+        self.CB_rfCh.setEnabled(self.CB_rfOn.isChecked())
+
         self.LE_WS = self.findChild(QtWidgets.QLineEdit, "LE_WS")
         self.LE_WW = self.findChild(QtWidgets.QLineEdit, "LE_WW")
-
         self.LE_WS.textChanged.connect(self._emptyLog)
         self.LE_WW.textChanged.connect(self._emptyLog)
 
@@ -103,11 +113,14 @@ class Window(QtWidgets.QMainWindow):
         self.PB_browseInfile.setEnabled(False)
         self.PB_browseOutfile.setEnabled(False)
         self.CB_trigCh.setEnabled(False)
+        self.CB_cut3s.setEnabled(False)
+        self.CB_rfCh.setEnabled(False)
+        self.CB_rfOn.setEnabled(False)
         self.LE_WS.setEnabled(False)
         self.LE_WW.setEnabled(False)
-        self.PB_start.setEnabled(False);
+        self.PB_start.setEnabled(False)
 
-        self.worker = ConversionThread(self.LB_infile.text(), self.LB_outfile.text(), self.CB_trigCh.currentIndex(), self.LE_WS.text(), self.LE_WW.text())
+        self.worker = ConversionThread(self.LB_infile.text(), self.LB_outfile.text(), self.CB_trigCh.currentIndex(), self.LE_WS.text(), self.LE_WW.text(), self.CB_cut3s.isChecked(), self.CB_rfOn.isChecked(), self.CB_rfCh.currentIndex())
         self.worker.finished.connect(self.onFinishedConversion)
         self.worker.start()
 
@@ -116,6 +129,9 @@ class Window(QtWidgets.QMainWindow):
         self.PB_browseInfile.setEnabled(True)
         self.PB_browseOutfile.setEnabled(True)
         self.CB_trigCh.setEnabled(True)
+        self.CB_cut3s.setEnabled(True)
+        self.CB_rfCh.setEnabled(True)
+        self.CB_rfOn.setEnabled(True)
         self.LE_WS.setEnabled(True)
         self.LE_WW.setEnabled(True)
         self.PB_start.setEnabled(True)
