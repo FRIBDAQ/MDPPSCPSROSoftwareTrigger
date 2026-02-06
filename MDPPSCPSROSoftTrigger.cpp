@@ -79,7 +79,7 @@ uint64_t  windowWidth    = 0; // derived from ns approx value in MDPP_TDC_UNIT
      int rfChannel = -1;
 
     bool dataCollecting = false;
-    bool collectingDone = true;
+    bool flushRFQueueRequested = false;
   double  windowStartTimestamp_ns = 0;
   double    windowEndTimestamp_ns = 0;
 uint64_t  windowStartTimestamp    = 0;
@@ -87,6 +87,7 @@ uint64_t    windowEndTimestamp    = 0;
 
 deque<MDPPSCPSRO *> hitDeque;
 queue<MDPPSCPSRO *> eventQueue;
+queue<CPhysicsEventItem *> rfQueue;
 
 	public:
 uint64_t getMdppTimestamp(MDPPSCPSRO &anEvent);
@@ -105,6 +106,7 @@ void sendCollection(CDataSink &sink);
 void updateTriggerWindow(MDPPSCPSRO &triggerEvent);
 void sending(CDataSink &sink, bool isTriggerChannel);
 void emptyingQueues(CDataSink &sink);
+void flushRFQueue(CDataSink &sink);
 };
 
 /**
@@ -463,7 +465,11 @@ void MDPPSCPSROSoftTrigger::sendCollection(CDataSink &sink)
 	newItem.setBodyCursor(dest);
 	newItem.updateSize();
 
-	send(sink, newItem);
+	if (rfChannel != -1) {
+		rfQueue.push(&newItem);
+	} else {
+		send(sink, newItem);
+	}
 
 	dataCollecting = false;
 }
@@ -513,7 +519,11 @@ void MDPPSCPSROSoftTrigger::sending(CDataSink &sink, bool isTriggerChannel)
 				cout << "                    MDPP timestamp in ns: " << getAbsoluteMdppTimestamp_ns(anEvent) << " (" << getAbsoluteMdppTimestamp(anEvent) << ")" << endl;
 #endif
 				CPhysicsEventItem &packedEvent = *pack(anEvent);
-				send(sink, packedEvent);
+				if (rfChannel != -1) {
+					rfQueue.push(&packedEvent);
+				} else {
+					send(sink, packedEvent);
+				}
 			}
 		 	else 
 			{
@@ -592,7 +602,11 @@ void MDPPSCPSROSoftTrigger::sending(CDataSink &sink, bool isTriggerChannel)
 #endif
 				anEvent = getFirstEvent();
 				CPhysicsEventItem &packedEvent = *pack(anEvent);
-				send(sink, packedEvent);
+				if (rfChannel != -1) {
+					rfQueue.push(&packedEvent);
+				} else {
+					send(sink, packedEvent);
+				}
 			} else {
 				break;
 			}
@@ -605,14 +619,35 @@ void MDPPSCPSROSoftTrigger::emptyingQueues(CDataSink &sink)
 #ifdef DEBUG
 				cout << "== Emptying for ending ==" << endl;
 #endif
-	if (!eventQueue.empty()) {
-		sendCollection(sink);
+	if (rfChannel == -1) {
+		if (!eventQueue.empty()) {
+			sendCollection(sink);
+		}
+
+		while (!hitDeque.empty()) {
+			MDPPSCPSRO &anEvent = getFirstEvent();
+
+			CPhysicsEventItem &packedEvent = *pack(anEvent);
+			send(sink, packedEvent);
+		}
+	} else if (rfChannel != -1 && flushRFQueueRequested) {
+		if (!eventQueue.empty()) {
+			sendCollection(sink);
+		}
+
+		 flushRFQueue(sink);
 	}
+}
 
-	while (!hitDeque.empty()) {
-		MDPPSCPSRO &anEvent = getFirstEvent();
+void MDPPSCPSROSoftTrigger::flushRFQueue(CDataSink &sink)
+{
+#ifdef DEBUG
+				cout << "== Flushing RF queue by RF leading edge==" << endl;
+#endif
+	while (!rfQueue.empty()) {
+		CPhysicsEventItem &packedEvent = *rfQueue.front();
+		rfQueue.pop();
 
-		CPhysicsEventItem &packedEvent = *pack(anEvent);
 		send(sink, packedEvent);
 	}
 }
@@ -632,7 +667,7 @@ int main(int argc, char **argv)
 	MDPPSCPSROSoftTrigger *core = new MDPPSCPSROSoftTrigger();
 	// Make sure we have enough command line parameters.
 
-	if (argc != 6) {
+	if (argc <= 6) {
 		usage(std::cerr, "Not enough command line parameters", argv[0]);
 	}
 
@@ -675,15 +710,15 @@ int main(int argc, char **argv)
 	core -> windowStart    = core -> windowStart_ns*1000/MDPP_TDC_UNIT;
 	core -> windowWidth    = core -> windowWidth_ns*1000/MDPP_TDC_UNIT;
 
-	if (argc >= 6) {
+	if (argc > 6) {
 		core -> cut3s = atoi(argv[6]);
-		if (argc == 7) {
-			core -> rfChannel = atoi(argv[7]);
-		} else {
-			core -> rfChannel = -1;
-		}
 	} else {
 		core -> cut3s = 0;
+	}
+
+	if (argc > 7) {
+		core -> rfChannel = atoi(argv[7]);
+	} else {
 		core -> rfChannel = -1;
 	}
 
@@ -695,12 +730,16 @@ int main(int argc, char **argv)
 	bool isIgnore3s = 0;
 	if (core -> cut3s == 1) {
 		std::cout << "== Ignoring the intial 3sec data!" << std :: endl;
+
 		isIgnore3s = 1;
 	}
 
+	bool isFirstRFDetected = 1;
 	if (core -> rfChannel != -1) {
 		std::cout << "== RF channel " << core -> rfChannel << " is specified." << std :: endl;
-		std::cout << "   Only data within the complete RF cycles will be sent." << std :: endl;
+		std::cout << "   Only data within the complete RF cycle will be sent." << std :: endl;
+
+		isFirstRFDetected = 0;
 	}
 	std::cout << std::endl;
 
@@ -721,7 +760,33 @@ int main(int argc, char **argv)
 			if (isIgnore3s) {
 				isIgnore3s = core -> getMdppTimestamp_ns(anEvent) < 3.0E9;
 
-				continue;
+				if (isIgnore3s) {
+				  std::unique_ptr<MDPPSCPSRO> pAnEvent(&anEvent);
+					continue;
+				}
+			}
+
+			if (!isFirstRFDetected) {
+				isFirstRFDetected = anEvent.ch == core -> rfChannel;
+
+				if (!isFirstRFDetected) {
+					std::unique_ptr<MDPPSCPSRO> pAnEvent(&anEvent);
+					continue;
+				}
+			}
+
+			if (core -> flushRFQueueRequested && !core -> dataCollecting) {
+				core -> flushRFQueue(*sink);
+				core -> flushRFQueueRequested = false;
+			}
+
+			if (core -> rfChannel != -1 && anEvent.ch == core -> rfChannel) {
+				if (core -> dataCollecting) {
+					core -> flushRFQueueRequested = true;
+				} else {
+					core -> flushRFQueue(*sink);
+					core -> flushRFQueueRequested = false;
+				}
 			}
 
 			core -> hitDeque.push_back(&anEvent);
