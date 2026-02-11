@@ -667,7 +667,7 @@ int main(int argc, char **argv)
 	MDPPSCPSROSoftTrigger *core = new MDPPSCPSROSoftTrigger();
 	// Make sure we have enough command line parameters.
 
-	if (argc <= 6) {
+	if (argc < 6) {
 		usage(std::cerr, "Not enough command line parameters", argv[0]);
 	}
 
